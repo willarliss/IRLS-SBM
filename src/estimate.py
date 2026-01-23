@@ -58,6 +58,7 @@ def sbm_slow(G, k, *,
     R = np.eye(k) * alpha
 
     if track_scores:
+        vprint('tracking scores may significantly increase runtime')
         ## Initialize trace of scores ##
         P = np.clip(Z@B@Z.T, EPS, 1-EPS)
         if likelihood == 'bernoulli':
@@ -159,6 +160,7 @@ def sbm_fast(G, k, *,
     R = np.eye(k) * alpha
 
     if track_scores:
+        vprint('tracking scores may significantly increase runtime')
         ## Initialize trace of scores ##
         P = np.clip(Z@B@Z.T, EPS, 1-EPS)
         if likelihood == 'bernoulli':
