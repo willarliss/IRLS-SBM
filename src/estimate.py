@@ -28,7 +28,7 @@ def sbm_slow(G, k, *,
              min_epochs=10,
              tol=0.01):
 
-    # Adjacency matrix
+    ## Adjacency matrix ##
     A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
     A_dense = A.toarray() if track_scores else None
 
@@ -41,24 +41,24 @@ def sbm_slow(G, k, *,
     else:
         raise ValueError
 
-    # Soft partition matrix
+    ## Soft partition matrix ##
     X = np.ones((len(G.nodes), k)) / k
     X += np.random.randn(len(G.nodes), k) / 100
-    # Hard partition matrix
+    ## Hard partition matrix ##
     Z = hardmax(X)
     partition = Z.argmax(1)
 
-    # Structure matrix sufficient statistics
+    ## Structure matrix sufficient statistics ##
     M = Z.T @ (A @ Z)
     n = Z.sum(0)[:, None]
-    # Structure matrix MLE
+    ## Structure matrix MLE ##
     B = M / (n@n.T).clip(1, None)
 
-    # Regularization
+    ## Regularization ##
     R = np.eye(k) * alpha
 
     if track_scores:
-        # Initialize trace of scores
+        ## Initialize trace of scores ##
         P = np.clip(Z@B@Z.T, EPS, 1-EPS)
         if likelihood == 'bernoulli':
             L = A_dense * np.log(P) + (1-A_dense) * np.log(1-P)
@@ -70,7 +70,7 @@ def sbm_slow(G, k, *,
 
     for epoch in range(max_iter):
 
-        # Compute predictions
+        ## Compute predictions ##
         P = np.clip(Z@B@Z.T, EPS, 1-EPS)
         if likelihood == 'bernoulli':
             w = (1 / P / (1-P)).mean(1)
@@ -79,26 +79,26 @@ def sbm_slow(G, k, *,
         elif likelihood == 'normal':
             w = np.ones(len(G.nodes))
 
-        # Perform fisher scoring updates
+        ## Perform fisher scoring updates ##
         W = diags(w)
         hess = B @ Z.T @ (W @ Z) @ B.T + R
         grad = (A.T @ W @ Z @ B.T).T
         X = (X - Z) + np.linalg.solve(hess, grad).T
 
-        # Recompute structure matrix
+        ## Recompute structure matrix ##
         Z = hardmax(X)
         M = Z.T @ (A @ Z)
         n = Z.sum(0)[:, None]
         B = M / (n@n.T).clip(1, None)
 
-        # Early stopping
+        ## Early stopping ##
         prev_partition = partition
         partition = Z.argmax(1)
         if epoch > min_epochs and (prev_partition == partition).mean() > 1-tol:
             vprint('converged in', epoch+1, 'iterations')
             break
 
-        # Append current score to trace
+        ## Append current score to trace ##
         if track_scores:
             P = np.clip(Z@B@Z.T, EPS, 1-EPS)
             if likelihood == 'bernoulli':
@@ -127,7 +127,7 @@ def sbm_fast(G, k, *,
              min_epochs=10,
              tol=0.01):
 
-    # Adjacency matrix
+    ## Adjacency matrix ##
     A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
     A_dense = A.toarray() if track_scores else None
 
@@ -140,24 +140,24 @@ def sbm_fast(G, k, *,
     else:
         raise ValueError
 
-    # Soft partition matrix
+    ## Soft partition matrix ##
     X = np.ones((len(G.nodes), k)) / k
     X += np.random.randn(len(G.nodes), k) / 100
-    # Hard partition matrix
+    ## Hard partition matrix ##
     Z = hardmax(X)
     partition = Z.argmax(1)
 
-    # Structure matrix sufficient statistics
+    ## Structure matrix sufficient statistics ##
     M = Z.T @ (A @ Z)
     n = Z.sum(0)[:, None]
-    # Structure matrix MLE
+    ## Structure matrix MLE ##
     B = M / (n@n.T).clip(1, None)
 
-    # Regularization
+    ## Regularization ##
     R = np.eye(k) * alpha
 
     if track_scores:
-        # Initialize trace of scores
+        ## Initialize trace of scores ##
         P = np.clip(Z@B@Z.T, EPS, 1-EPS)
         if likelihood == 'bernoulli':
             L = A_dense * np.log(P) + (1-A_dense) * np.log(1-P)
@@ -169,7 +169,7 @@ def sbm_fast(G, k, *,
 
     for epoch in range(max_iter):
 
-        # Compute predictions
+        ## Compute predictions ##
         if likelihood == 'bernoulli':
             w_pre = 1 / (B * (1 - B)).clip(EPS, None)
         elif likelihood == 'poisson':
@@ -179,27 +179,27 @@ def sbm_fast(G, k, *,
         w_block = (w_pre * n.T).sum(axis=1) / n.sum()
         w = w_block[partition]
 
-        # Perform fisher scoring updates
+        ## Perform fisher scoring updates ##
         ZB = B.T[partition, :]
         ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW + R
         grad = (A.T @ ZBW).T
         X = (X - Z) + np.linalg.solve(hess, grad).T
 
-        # Recompute structure matrix
+        ## Recompute structure matrix ##
         Z = hardmax(X)
         M = Z.T @ (A @ Z)
         n = Z.sum(0)[:, None]
         B = M / (n@n.T).clip(1, None)
 
-        # Early stopping
+        ## Early stopping ##
         prev_partition = partition
         partition = Z.argmax(1)
         if epoch > min_epochs and (prev_partition == partition).mean() > 1-tol:
             vprint('converged in', epoch+1, 'iterations')
             break
 
-        # Append current score to trace
+        ## Append current score to trace ##
         if track_scores:
             P = np.clip(Z@B@Z.T, EPS, 1-EPS)
             if likelihood == 'bernoulli':
