@@ -1,6 +1,6 @@
 import networkx as nx
 import numpy as np
-from scipy.sparse import diags
+from scipy.sparse import diags, csr_array
 
 
 EPS = 1e-8
@@ -130,6 +130,7 @@ def sbm_fast(G, k, *,
     ## Adjacency matrix ##
     A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
     A_dense = A.toarray() if track_scores else None
+    n_nodes = len(G.nodes)
 
     if likelihood == 'bernoulli':
         assert ((A.data==0) | (A.data==1)).all()
@@ -141,17 +142,18 @@ def sbm_fast(G, k, *,
         raise ValueError
 
     ## Soft partition matrix ##
-    X = np.ones((len(G.nodes), k)) / k
-    X += np.random.randn(len(G.nodes), k) / 100
+    X = np.ones((n_nodes, k)) / k
+    X += np.random.randn(n_nodes, k) / 100
     ## Hard partition matrix ##
-    Z = hardmax(X)
-    partition = Z.argmax(1)
+    partition = X.argmax(1)
+    Z = csr_array((np.ones(n_nodes), (np.arange(n_nodes), partition)),
+                  shape=X.shape, dtype=X.dtype)
 
     ## Structure matrix sufficient statistics ##
     M = Z.T @ (A @ Z)
     n = Z.sum(0)[:, None]
     ## Structure matrix MLE ##
-    B = M / (n@n.T).clip(1, None)
+    B = M.toarray() / (n@n.T).clip(1, None)
 
     ## Regularization ##
     R = np.eye(k) * alpha
@@ -180,21 +182,27 @@ def sbm_fast(G, k, *,
         w = w_block[partition]
 
         ## Perform fisher scoring updates ##
-        ZB = B.T[partition, :]
+        # ZB = B.T[partition, :]
+        ZB = Z @ B.T
         ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW + R
+        # grad = ZBW.T @ A
         grad = (A.T @ ZBW).T
         X = (X - Z) + np.linalg.solve(hess, grad).T
 
+        ## Update partition ##
+        prev_partition = partition
+        partition = X.argmax(1)
+
         ## Recompute structure matrix ##
-        Z = hardmax(X)
+        Z.indices[:], Z.data[:] = partition, 1
+        # Z.indices[:] = partition
+        # Z.data[:] = 1
         M = Z.T @ (A @ Z)
         n = Z.sum(0)[:, None]
-        B = M / (n@n.T).clip(1, None)
+        B = M.toarray() / (n@n.T).clip(1, None)
 
         ## Early stopping ##
-        prev_partition = partition
-        partition = Z.argmax(1)
         if epoch > min_epochs and (prev_partition == partition).mean() > 1-tol:
             vprint('converged in', epoch+1, 'iterations')
             break
