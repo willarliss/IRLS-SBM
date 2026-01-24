@@ -18,6 +18,10 @@ def hardmax(X):
     return Y
 
 
+def clog(x):
+    return np.log(np.clip(x, EPS, None))
+
+
 # This approach implements the method exactly as derived
 def sbm_slow(G, k, *,
              likelihood='bernoulli',
@@ -29,6 +33,7 @@ def sbm_slow(G, k, *,
              tol=0.01):
 
     ## Adjacency matrix ##
+    G = G.to_directed()
     A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
     A_dense = A.toarray() if track_scores else None
 
@@ -66,7 +71,7 @@ def sbm_slow(G, k, *,
         elif likelihood == 'poisson':
             L = A_dense * np.log(P) - P
         elif likelihood == 'normal':
-            L = 1/2 * (A_dense - P)**2
+            L = -1/2 * (A_dense - P)**2
         trace = [L.mean()]
 
     for epoch in range(max_iter):
@@ -95,7 +100,7 @@ def sbm_slow(G, k, *,
         ## Early stopping ##
         prev_partition = partition
         partition = Z.argmax(1)
-        if epoch > min_epochs and (prev_partition == partition).mean() > 1-tol:
+        if epoch >= min_epochs and (prev_partition == partition).mean() > 1-tol:
             vprint('converged in', epoch+1, 'iterations')
             break
 
@@ -107,7 +112,7 @@ def sbm_slow(G, k, *,
             elif likelihood == 'poisson':
                 L = A_dense * np.log(P) - P
             elif likelihood == 'normal':
-                L = 1/2 * (A_dense - P)**2
+                L = -1/2 * (A_dense - P)**2
             trace.append(L.mean())
 
     else:
@@ -129,8 +134,8 @@ def sbm_fast(G, k, *,
              tol=0.01):
 
     ## Adjacency matrix ##
+    G = G.to_directed()
     A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
-    A_dense = A.toarray() if track_scores else None
     n_nodes = len(G.nodes)
 
     if likelihood == 'bernoulli':
@@ -151,25 +156,27 @@ def sbm_fast(G, k, *,
                   shape=X.shape, dtype=X.dtype)
 
     ## Structure matrix sufficient statistics ##
-    M = Z.T @ (A @ Z)
+    M = (Z.T @ (A @ Z)).toarray()
     n = Z.sum(0)[:, None]
     ## Structure matrix MLE ##
-    B = M.toarray() / (n@n.T).clip(1, None)
+    B = M / (n@n.T).clip(1, None)
 
     ## Regularization ##
     R = np.eye(k) * alpha
 
+    A2 = None # elementwise square of A
     if track_scores:
-        vprint('tracking scores may significantly increase runtime')
+        vprint('tracking scores may increase runtime')
         ## Initialize trace of scores ##
-        P = np.clip(Z@B@Z.T, EPS, 1-EPS)
         if likelihood == 'bernoulli':
-            L = A_dense * np.log(P) + (1-A_dense) * np.log(1-P)
+            L = M * clog(B) + (n@n.T - M) * clog(1-B)
         elif likelihood == 'poisson':
-            L = A_dense * np.log(P) - P
+            L = M * clog(B) - (n@n.T) * B
         elif likelihood == 'normal':
-            L = 1/2 * (A_dense - P)**2
-        trace = [L.mean()]
+            A2 = A.multiply(A)
+            M2 = (Z.T @ (A2 @ Z)).toarray()
+            L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
+        trace = [L.sum()/n_nodes**2]
 
     for epoch in range(max_iter):
 
@@ -198,27 +205,25 @@ def sbm_fast(G, k, *,
 
         ## Recompute structure matrix ##
         Z.indices[:], Z.data[:] = partition, 1
-        # Z.indices[:] = partition
-        # Z.data[:] = 1
-        M = Z.T @ (A @ Z)
+        M = (Z.T @ (A @ Z)).toarray()
         n = Z.sum(0)[:, None]
-        B = M.toarray() / (n@n.T).clip(1, None)
+        B = M / (n@n.T).clip(1, None)
 
         ## Early stopping ##
-        if epoch > min_epochs and (prev_partition == partition).mean() > 1-tol:
+        if epoch >= min_epochs and (prev_partition == partition).mean() > 1-tol:
             vprint('converged in', epoch+1, 'iterations')
             break
 
         ## Append current score to trace ##
         if track_scores:
-            P = np.clip(Z@B@Z.T, EPS, 1-EPS)
             if likelihood == 'bernoulli':
-                L = A_dense * np.log(P) + (1-A_dense) * np.log(1-P)
+                L = M * clog(B) + (n@n.T - M) * clog(1-B)
             elif likelihood == 'poisson':
-                L = A_dense * np.log(P) - P
+                L = M * clog(B) - (n@n.T) * B
             elif likelihood == 'normal':
-                L = 1/2 * (A_dense - P)**2
-            trace.append(L.mean())
+                M2 = (Z.T @ (A2 @ Z)).toarray()
+                L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
+            trace.append(L.sum()/n_nodes**2)
 
     else:
         vprint('did not converge after', max_iter, 'iterations')
