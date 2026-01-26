@@ -1,5 +1,5 @@
 *.ipynb
 !test.ipynb
 .DS_Store
-__pycache__
-sbm_animation/
+__pycache__/
+sbm_animation.gif
