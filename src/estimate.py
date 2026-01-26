@@ -29,7 +29,7 @@ def sbm_slow(G, k, *,
              weight=None,
              track_scores=False,
              max_iter=100,
-             min_epochs=10,
+             min_iter=10,
              tol=0.01):
 
     ## Adjacency matrix ##
@@ -100,7 +100,7 @@ def sbm_slow(G, k, *,
         ## Early stopping ##
         prev_partition = partition
         partition = Z.argmax(1)
-        if epoch >= min_epochs and (prev_partition == partition).mean() > 1-tol:
+        if epoch >= min_iter and (prev_partition == partition).mean() > 1-tol:
             vprint('converged in', epoch+1, 'iterations')
             break
 
@@ -130,7 +130,7 @@ def sbm_fast(G, k, *,
              weight=None,
              track_scores=False,
              max_iter=100,
-             min_epochs=10,
+             min_iter=10,
              tol=0.01):
 
     ## Adjacency matrix ##
@@ -210,7 +210,7 @@ def sbm_fast(G, k, *,
         B = M / (n@n.T).clip(1, None)
 
         ## Early stopping ##
-        if epoch >= min_epochs and (prev_partition == partition).mean() > 1-tol:
+        if epoch >= min_iter and (prev_partition == partition).mean() > 1-tol:
             vprint('converged in', epoch+1, 'iterations')
             break
 
