@@ -22,7 +22,6 @@ def clog(x):
     return np.log(np.clip(x, EPS, None))
 
 
-# This approach implements the method exactly as derived
 def sbm_slow(G, k, *,
              likelihood='bernoulli',
              alpha=0.,
@@ -31,6 +30,37 @@ def sbm_slow(G, k, *,
              max_iter=100,
              min_iter=10,
              tol=0.01):
+    """This approach implements the SBM estimation method exactly as derived in write_up.pdf.
+
+    Parameters
+    ----------
+    G : networkx.Graph
+        Input graph to fit the parameters to.
+    k : int
+        Number of communities to estimate.
+    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
+        Likelihood used for the SBM (default 'bernoulli').
+    alpha : float, optional
+        Curvature smoothing parameter for the Fisher update (default 0.).
+    weight : str or None, optional
+        Edge attribute to use as weight when constructing the adjacency matrix.
+    track_scores : bool, optional
+        If True, track and return a trace proportional to the log-likelihood per epoch.
+    max_iter : int, optional
+        Maximum number of iterations for estimation.
+    min_iter : int, optional
+        Minimum number of iterations before checking for early stopping.
+    tol : float, optional
+        Convergence tolerance for partition stability (fraction of unchanged nodes).
+
+    Returns
+    -------
+    partition : ndarray
+        Integer array of community assignments (shape: n_nodes,).
+    trace : ndarray, optional
+        If `track_scores` is True, returns a tuple (partition, trace) where ``trace``
+        is an array of scores proportional to the log-likelihoods per epoch.
+    """
 
     ## Adjacency matrix ##
     G = G.to_directed()
@@ -46,11 +76,8 @@ def sbm_slow(G, k, *,
     else:
         raise ValueError
 
-    ## Soft partition matrix ##
-    X = np.ones((len(G.nodes), k)) / k
-    X += np.random.randn(len(G.nodes), k) / 100
-    ## Hard partition matrix ##
-    Z = hardmax(X)
+    ## Partition matrix ##
+    Z = hardmax(np.random.rand(len(G.nodes), k))
     partition = Z.argmax(1)
 
     ## Structure matrix sufficient statistics ##
@@ -65,11 +92,11 @@ def sbm_slow(G, k, *,
     if track_scores:
         vprint('tracking scores may significantly increase runtime')
         ## Initialize trace of scores ##
-        P = np.clip(Z@B@Z.T, EPS, 1-EPS)
+        P = Z@B@Z.T
         if likelihood == 'bernoulli':
-            L = A_dense * np.log(P) + (1-A_dense) * np.log(1-P)
+            L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
         elif likelihood == 'poisson':
-            L = A_dense * np.log(P) - P
+            L = A_dense * clog(P) - P
         elif likelihood == 'normal':
             L = -1/2 * (A_dense - P)**2
         trace = [L.mean()]
@@ -85,14 +112,16 @@ def sbm_slow(G, k, *,
         elif likelihood == 'normal':
             w = np.ones(len(G.nodes))
 
-        ## Perform fisher scoring updates ##
+        ## Perform Fisher scoring updates ##
         W = diags(w)
         hess = B @ Z.T @ (W @ Z) @ B.T + R
         grad = (A.T @ W @ Z @ B.T).T
-        X = (X - Z) + np.linalg.solve(hess, grad).T
+        Z_update = np.linalg.solve(hess, grad).T
+
+        ## Hardmax "projection" ##
+        Z = hardmax(Z_update)
 
         ## Recompute structure matrix ##
-        Z = hardmax(X)
         M = Z.T @ (A @ Z)
         n = Z.sum(0)[:, None]
         B = M / (n@n.T).clip(1, None)
@@ -106,11 +135,11 @@ def sbm_slow(G, k, *,
 
         ## Append current score to trace ##
         if track_scores:
-            P = np.clip(Z@B@Z.T, EPS, 1-EPS)
+            P = Z@B@Z.T
             if likelihood == 'bernoulli':
-                L = A_dense * np.log(P) + (1-A_dense) * np.log(1-P)
+                L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
             elif likelihood == 'poisson':
-                L = A_dense * np.log(P) - P
+                L = A_dense * clog(P) - P
             elif likelihood == 'normal':
                 L = -1/2 * (A_dense - P)**2
             trace.append(L.mean())
@@ -119,7 +148,7 @@ def sbm_slow(G, k, *,
         vprint('did not converge after', max_iter, 'iterations')
 
     if track_scores:
-        return partition, np.array(trace)
+        return partition, np.asarray(trace)
     return partition
 
 
@@ -132,9 +161,40 @@ def sbm_fast(G, k, *,
              max_iter=100,
              min_iter=10,
              tol=0.01):
+    """This approach implements the SBM estimation method from write_up.pdf but with better
+    computational efficiency.
+
+    Parameters
+    ----------
+    G : networkx.Graph
+        Input graph to fit the parameters to.
+    k : int
+        Number of communities to estimate.
+    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
+        Likelihood used for the SBM (default 'bernoulli').
+    alpha : float, optional
+        Curvature smoothing parameter for the Fisher update (default 0.).
+    weight : str or None, optional
+        Edge attribute to use as weight when constructing the adjacency matrix.
+    track_scores : bool, optional
+        If True, track and return a trace proportional to the log-likelihood per epoch.
+    max_iter : int, optional
+        Maximum number of iterations for estimation.
+    min_iter : int, optional
+        Minimum number of iterations before checking for early stopping.
+    tol : float, optional
+        Convergence tolerance for partition stability (fraction of unchanged nodes).
+
+    Returns
+    -------
+    partition : ndarray
+        Integer array of community assignments (shape: n_nodes,).
+    trace : ndarray, optional
+        If `track_scores` is True, returns a tuple (partition, trace) where ``trace``
+        is an array of scores proportional to the log-likelihoods per epoch.
+    """
 
     ## Adjacency matrix ##
-    G = G.to_directed()
     A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
     n_nodes = len(G.nodes)
 
@@ -147,13 +207,10 @@ def sbm_fast(G, k, *,
     else:
         raise ValueError
 
-    ## Soft partition matrix ##
-    X = np.ones((n_nodes, k)) / k
-    X += np.random.randn(n_nodes, k) / 100
-    ## Hard partition matrix ##
-    partition = X.argmax(1)
+    ## Partition matrix ##
+    partition = np.random.randint(k, size=n_nodes)
     Z = csr_array((np.ones(n_nodes), (np.arange(n_nodes), partition)),
-                  shape=X.shape, dtype=X.dtype)
+                  shape=(n_nodes, k), dtype=float)
 
     ## Structure matrix sufficient statistics ##
     M = (Z.T @ (A @ Z)).toarray()
@@ -190,21 +247,19 @@ def sbm_fast(G, k, *,
         w_block = (w_pre * n.T).sum(axis=1) / n.sum()
         w = w_block[partition]
 
-        ## Perform fisher scoring updates ##
-        # ZB = B.T[partition, :]
+        ## Perform Fisher scoring updates ##
         ZB = Z @ B.T
         ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW + R
-        # grad = ZBW.T @ A
         grad = (A.T @ ZBW).T
-        X = (X - Z) + np.linalg.solve(hess, grad).T
+        Z_update = np.linalg.solve(hess, grad).T
 
         ## Update partition ##
         prev_partition = partition
-        partition = X.argmax(1)
+        partition = Z_update.argmax(1)
+        Z.indices[:], Z.data[:] = partition, 1
 
         ## Recompute structure matrix ##
-        Z.indices[:], Z.data[:] = partition, 1
         M = (Z.T @ (A @ Z)).toarray()
         n = Z.sum(0)[:, None]
         B = M / (n@n.T).clip(1, None)
@@ -245,9 +300,42 @@ def sbm_fast_drop(G, *,
                   max_iter=100,
                   min_iter=10,
                   tol=0.01):
+    """This approach extends sbm_fast by iteratively dropping small communities until
+    the appropriate number of communities is found.
+
+    Parameters
+    ----------
+    G : networkx.Graph
+        Input graph to fit the parameters to.
+    min_size : int, optional
+        Minimum allowed community size; communities smaller than this are dropped.
+    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
+        Likelihood used for the SBM (default 'bernoulli').
+    alpha : float, optional
+        Curvature smoothing parameter for the Fisher update (default 0.).
+    gamma : float, optional
+        Entropy weight used to penalize partitions with more communities.
+    weight : str or None, optional
+        Edge attribute to use as weight when constructing the adjacency matrix.
+    track_scores : bool, optional
+        If True, track and return a trace proportional to the log-likelihood per epoch.
+    max_iter : int, optional
+        Maximum number of iterations for estimation.
+    min_iter : int, optional
+        Minimum number of iterations before checking for early stopping.
+    tol : float, optional
+        Convergence tolerance for partition stability (fraction of unchanged nodes).
+
+    Returns
+    -------
+    partition : ndarray
+        Integer array of community assignments (shape: n_nodes,).
+    trace : ndarray, optional
+        If ``track_scores`` is True, returns a tuple (partition, trace) where ``trace``
+        is an array of average log-likelihoods per epoch.
+    """
 
     ## Adjacency matrix ##
-    G = G.to_directed()
     A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
     n_nodes = len(G.nodes)
     n_comms = n_nodes // min_size
@@ -261,13 +349,10 @@ def sbm_fast_drop(G, *,
     else:
         raise ValueError
 
-    ## Soft partition matrix ##
-    X = np.ones((n_nodes, n_comms)) / n_comms
-    X += np.random.randn(n_nodes, n_comms) / 100
-    ## Hard partition matrix ##
-    partition = X.argmax(1)
+    ## Partition matrix ##
+    partition = np.random.randint(n_comms, size=n_nodes)
     Z = csr_array((np.ones(n_nodes), (np.arange(n_nodes), partition)),
-                  shape=X.shape, dtype=X.dtype)
+                  shape=(n_nodes, n_comms), dtype=float)
 
     ## Structure matrix sufficient statistics ##
     M = (Z.T @ (A @ Z)).toarray()
@@ -305,11 +390,9 @@ def sbm_fast_drop(G, *,
         w = w_block[partition]
 
         ## Compute gradients and hessian ##
-        # ZB = B.T[partition, :]
         ZB = Z @ B.T
         ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW + R
-        # grad = ZBW.T @ A
         grad = (A.T @ ZBW).T
 
         ## Modify derivatives with entropy penalty ##
@@ -317,22 +400,22 @@ def sbm_fast_drop(G, *,
         grad -= gamma * (np.log(p) + 1)[:, None]
         hess -= gamma * np.diag(1 / p)
 
-        ## Perform fisher scoring updates ##
-        X = (X - Z) + np.linalg.solve(hess, grad).T
+        ## Perform Fisher scoring updates ##
+        Z_update = np.linalg.solve(hess, grad).T
 
         ## Update partition ##
         prev_partition = partition
-        partition = X.argmax(1)
+        partition = Z_update.argmax(1)
 
         ## Get rid of unused communities for stability ##
         mask = np.bincount(partition, minlength=n_comms) >= min_size
         if (~mask).any():
-            X = X[:, mask]
-            partition = X.argmax(1)
-            n_comms = X.shape[1]
+            Z_update = Z_update[:, mask]
+            partition = Z_update.argmax(1)
+            n_comms = Z_update.shape[1]
             R = np.eye(n_comms) * alpha
             Z = csr_array((np.ones(n_nodes), (np.arange(n_nodes), partition)),
-                          shape=X.shape, dtype=X.dtype)
+                          shape=(n_nodes, n_comms), dtype=float)
         else:
             Z.indices[:] = partition
             Z.data[:] = 1
