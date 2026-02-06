@@ -114,8 +114,8 @@ def sbm_slow(G, k, *,
 
         ## Perform Fisher scoring updates ##
         W = diags(w)
-        hess = B @ Z.T @ (W @ Z) @ B.T + R
-        grad = (A.T @ W @ Z @ B.T).T
+        hess = B.T @ Z.T @ (W @ Z) @ B + R
+        grad = (A.T @ W @ Z @ B).T
         Z_update = np.linalg.solve(hess, grad).T
 
         ## Hardmax "projection" ##
@@ -152,7 +152,6 @@ def sbm_slow(G, k, *,
     return partition
 
 
-# This approach implements the method with more computational efficiency
 def sbm_fast(G, k, *,
              likelihood='bernoulli',
              alpha=0.,
@@ -248,7 +247,7 @@ def sbm_fast(G, k, *,
         w = w_block[partition]
 
         ## Perform Fisher scoring updates ##
-        ZB = Z @ B.T
+        ZB = Z @ B
         ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW + R
         grad = (A.T @ ZBW).T
@@ -288,8 +287,6 @@ def sbm_fast(G, k, *,
     return partition
 
 
-# This approach extends sbm_fast by iteratively dropping small communities
-# until the appropriate number of communities is found
 def sbm_fast_drop(G, *,
                   min_size=3,
                   likelihood='bernoulli',
@@ -390,7 +387,7 @@ def sbm_fast_drop(G, *,
         w = w_block[partition]
 
         ## Compute gradients and hessian ##
-        ZB = Z @ B.T
+        ZB = Z @ B
         ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW + R
         grad = (A.T @ ZBW).T
