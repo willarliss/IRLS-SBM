@@ -90,6 +90,8 @@ def sbm_slow(G, k, *,
         hess = B @ Z.T @ (W @ Z) @ B.T + R
         grad = (A.T @ W @ Z @ B.T).T
         X = (X - Z) + np.linalg.solve(hess, grad).T
+        # X += eta * np.linalg.solve(hess, grad).T
+        # X = np.linalg.solve(hess, grad).T
 
         ## Recompute structure matrix ##
         Z = hardmax(X)
@@ -129,6 +131,7 @@ def sbm_fast(G, k, *,
              alpha=0.,
              weight=None,
              track_scores=False,
+             structure_freq=1,
              max_iter=100,
              min_iter=10,
              tol=0.01):
@@ -198,6 +201,9 @@ def sbm_fast(G, k, *,
         # grad = ZBW.T @ A
         grad = (A.T @ ZBW).T
         X = (X - Z) + np.linalg.solve(hess, grad).T
+        # X += eta * np.linalg.solve(hess, grad).T
+        # X = np.linalg.solve(hess, grad).T
+        # X = eta*(X-Z) + np.linalg.solve(hess, grad).T
 
         ## Update partition ##
         prev_partition = partition
@@ -205,9 +211,10 @@ def sbm_fast(G, k, *,
 
         ## Recompute structure matrix ##
         Z.indices[:], Z.data[:] = partition, 1
-        M = (Z.T @ (A @ Z)).toarray()
-        n = Z.sum(0)[:, None]
-        B = M / (n@n.T).clip(1, None)
+        if epoch % structure_freq == 0:
+            M = (Z.T @ (A @ Z)).toarray()
+            n = Z.sum(0)[:, None]
+            B = M / (n@n.T).clip(1, None)
 
         ## Early stopping ##
         if epoch >= min_iter and (prev_partition == partition).mean() > 1-tol:
@@ -241,6 +248,7 @@ def sbm_fast_drop(G, *,
                   alpha=0.,
                   gamma=1.,
                   weight=None,
+                  structure_freq=1,
                   track_scores=False,
                   max_iter=100,
                   min_iter=10,
@@ -319,6 +327,9 @@ def sbm_fast_drop(G, *,
 
         ## Perform fisher scoring updates ##
         X = (X - Z) + np.linalg.solve(hess, grad).T
+        # X += eta * np.linalg.solve(hess, grad).T
+        # X = np.linalg.solve(hess, grad).T
+        # X = eta*(X-Z) + np.linalg.solve(hess, grad).T
 
         ## Update partition ##
         prev_partition = partition
@@ -338,9 +349,10 @@ def sbm_fast_drop(G, *,
             Z.data[:] = 1
 
         ## Recompute structure matrix ##
-        M = (Z.T @ (A @ Z)).toarray()
-        n = Z.sum(0)[:, None]
-        B = M / (n@n.T).clip(1, None)
+        if (epoch % structure_freq == 0) or (~mask).any():
+            M = (Z.T @ (A @ Z)).toarray()
+            n = Z.sum(0)[:, None]
+            B = M / (n@n.T).clip(1, None)
 
         ## Early stopping ##
         if epoch >= min_iter and (prev_partition == partition).mean() > 1-tol:
