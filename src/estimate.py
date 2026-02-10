@@ -246,11 +246,13 @@ def sbm_fast(G, k, *,
         w_block = (w_pre * n.T).sum(axis=1) / n.sum()
         w = w_block[partition]
 
-        ## Perform Fisher scoring updates ##
+        ## Compute gradients and hessian ##
         ZB = Z @ B
         ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW + R
         grad = (A.T @ ZBW).T
+
+        ## Perform Fisher scoring updates ##
         Z_update = np.linalg.solve(hess, grad).T
 
         ## Update partition ##
@@ -392,10 +394,8 @@ def sbm_fast_drop(G, *,
         hess = ZB.T @ ZBW + R
         grad = (A.T @ ZBW).T
 
-        ## Modify derivatives with entropy penalty ##
-        p = Z.mean(0).clip(EPS, None)
-        grad -= gamma * (np.log(p) + 1)[:, None]
-        hess -= gamma * np.diag(1 / p)
+        ## Modify hessian with inverse frequency penalty ##
+        hess -= gamma * np.diag(1 / Z.mean(0).clip(EPS, None))
 
         ## Perform Fisher scoring updates ##
         Z_update = np.linalg.solve(hess, grad).T
