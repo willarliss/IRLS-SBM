@@ -1,5 +1,7 @@
 import networkx as nx
 import numpy as np
+import numpy.linalg as nla
+import scipy.linalg as sla
 from scipy.sparse import diags, csr_array
 
 
@@ -20,6 +22,19 @@ def hardmax(X):
 
 def clog(x):
     return np.log(np.clip(x, EPS, None))
+
+
+def solve(A, b, *, min_scipy_size=20):
+    # Efficiently solve Ax=b
+    if A.shape[0] < min_scipy_size:
+        x = nla.solve(A, b)
+    else:
+        try:
+            L = sla.cho_factor(A, check_finite=False)
+            x = sla.cho_solve(L, b, check_finite=False)
+        except sla.LinAlgError:
+            x = nla.solve(A, b)
+    return x
 
 
 def sbm_slow(G, k, *,
@@ -116,7 +131,7 @@ def sbm_slow(G, k, *,
         W = diags(w)
         hess = B.T @ Z.T @ (W @ Z) @ B + R
         grad = (A.T @ W @ Z @ B).T
-        Z_update = np.linalg.solve(hess, grad).T
+        Z_update = nla.solve(hess, grad).T
 
         ## Hardmax "projection" ##
         Z = hardmax(Z_update)
@@ -253,7 +268,7 @@ def sbm_fast(G, k, *,
         grad = (A.T @ ZBW).T
 
         ## Perform Fisher scoring updates ##
-        Z_update = np.linalg.solve(hess, grad).T
+        Z_update = solve(hess, grad).T
 
         ## Update partition ##
         prev_partition = partition
@@ -398,7 +413,7 @@ def sbm_fast_drop(G, *,
         hess -= gamma * np.diag(1 / Z.mean(0).clip(EPS, None))
 
         ## Perform Fisher scoring updates ##
-        Z_update = np.linalg.solve(hess, grad).T
+        Z_update = solve(hess, grad).T
 
         ## Update partition ##
         prev_partition = partition
