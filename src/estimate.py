@@ -1,3 +1,6 @@
+"""Stochastic Block Model estimation as described in the [write-up](write_up.pdf).
+"""
+
 import networkx as nx
 import numpy as np
 import numpy.linalg as nla
@@ -45,7 +48,7 @@ def sbm_slow(G, k, *,
              max_iter=100,
              min_iter=10,
              tol=0.01):
-    """This approach implements the SBM estimation method exactly as derived in write_up.pdf.
+    """This approach implements the SBM estimation method exactly as derived in the write-up.
 
     Parameters
     ----------
@@ -54,9 +57,9 @@ def sbm_slow(G, k, *,
     k : int
         Number of communities to estimate.
     likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Likelihood used for the SBM (default 'bernoulli').
+        Likelihood used for the SBM (default 'bernoulli'), see write-up.
     alpha : float, optional
-        Curvature smoothing parameter for the Fisher update (default 0.).
+        Curvature smoothing parameter for the Fisher update (default 0.), see write-up.
     weight : str or None, optional
         Edge attribute to use as weight when constructing the adjacency matrix.
     track_scores : bool, optional
@@ -175,7 +178,7 @@ def sbm_fast(G, k, *,
              max_iter=100,
              min_iter=10,
              tol=0.01):
-    """This approach implements the SBM estimation method from write_up.pdf but with better
+    """This approach implements the SBM estimation method from the write-up but with better
     computational efficiency.
 
     Parameters
@@ -185,9 +188,9 @@ def sbm_fast(G, k, *,
     k : int
         Number of communities to estimate.
     likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Likelihood used for the SBM (default 'bernoulli').
+        Likelihood used for the SBM (default 'bernoulli'), see write-up.
     alpha : float, optional
-        Curvature smoothing parameter for the Fisher update (default 0.).
+        Curvature smoothing parameter for the Fisher update (default 0.), see write-up.
     weight : str or None, optional
         Edge attribute to use as weight when constructing the adjacency matrix.
     track_scores : bool, optional
@@ -308,7 +311,7 @@ def sbm_fast_drop(G, *,
                   min_size=3,
                   likelihood='bernoulli',
                   alpha=0.,
-                  gamma=1.,
+                  gamma=0.1,
                   weight=None,
                   track_scores=False,
                   max_iter=100,
@@ -322,13 +325,14 @@ def sbm_fast_drop(G, *,
     G : networkx.Graph
         Input graph to fit the parameters to.
     min_size : int, optional
-        Minimum allowed community size; communities smaller than this are dropped.
+        Minimum allowed community size, see write-up. Communities smaller than this are dropped.
     likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Likelihood used for the SBM (default 'bernoulli').
+        Likelihood used for the SBM (default 'bernoulli'), see write-up.
     alpha : float, optional
-        Curvature smoothing parameter for the Fisher update (default 0.).
+        Curvature smoothing parameter for the Fisher update (default 0.), see write-up.
     gamma : float, optional
-        Entropy weight used to penalize partitions with more communities.
+        Penalty strength controlling the number of communities. A smaller value of gamma leads to
+        fewer communities. Equivalent to gamma=1/beta in write-up.
     weight : str or None, optional
         Edge attribute to use as weight when constructing the adjacency matrix.
     track_scores : bool, optional
@@ -410,7 +414,7 @@ def sbm_fast_drop(G, *,
         grad = (A.T @ ZBW).T
 
         ## Modify hessian with inverse frequency penalty ##
-        hess -= gamma * np.diag(1 / Z.mean(0).clip(EPS, None))
+        hess += 1/gamma * np.diag(1 / Z.mean(0).clip(EPS, None))
 
         ## Perform Fisher scoring updates ##
         Z_update = solve(hess, grad).T
