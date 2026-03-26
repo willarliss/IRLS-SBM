@@ -307,7 +307,7 @@ def sbm_fast(G, k, *,
     return partition
 
 
-def sbm_fast_drop(G, *,
+def sbm_fast_drop(G, k0=None, *,
                   min_size=3,
                   likelihood='bernoulli',
                   alpha=0.,
@@ -324,6 +324,8 @@ def sbm_fast_drop(G, *,
     ----------
     G : networkx.Graph
         Input graph to fit the parameters to.
+    k0 : int
+        Initial/maximum number of communities to estimate.
     min_size : int, optional
         Minimum allowed community size, see write-up. Communities smaller than this are dropped.
     likelihood : {'bernoulli', 'poisson', 'normal'}, optional
@@ -356,7 +358,10 @@ def sbm_fast_drop(G, *,
     ## Adjacency matrix ##
     A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
     n_nodes = len(G.nodes)
-    n_comms = n_nodes // min_size
+    if k0 is None:
+        n_comms = n_nodes // min_size
+    else:
+        n_comms = int(k0)
 
     if likelihood == 'bernoulli':
         assert ((A.data==0) | (A.data==1)).all()
