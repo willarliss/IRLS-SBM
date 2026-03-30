@@ -166,8 +166,8 @@ def sbm_slow(G, k, *,
         vprint('did not converge after', max_iter, 'iterations')
 
     if track_scores:
-        return partition, np.asarray(trace)
-    return partition
+        return partition, B, np.asarray(trace)
+    return partition, B
 
 
 def sbm_fast(G, k, *,
@@ -303,8 +303,8 @@ def sbm_fast(G, k, *,
         vprint('did not converge after', max_iter, 'iterations')
 
     if track_scores:
-        return partition, np.array(trace)
-    return partition
+        return partition, B, np.array(trace)
+    return partition, B
 
 
 def sbm_fast_drop(G, k0=None, *,
@@ -419,8 +419,8 @@ def sbm_fast_drop(G, k0=None, *,
         grad = (A.T @ ZBW).T
 
         ## Modify hessian with inverse frequency penalty ##
-        inv_freq = n_nodes / n.squeeze() # =1/Z.mean(0)
-        hess += 1/gamma * np.diag(inv_freq.clip(EPS, None))
+        inv_freq = n_nodes / n.squeeze().clip(1, None) # =1/Z.mean(0)
+        hess += 1/gamma * np.diag(inv_freq)
 
         ## Perform Fisher scoring updates ##
         Z_update = solve(hess, grad).T
@@ -467,5 +467,5 @@ def sbm_fast_drop(G, k0=None, *,
         vprint('did not converge after', max_iter, 'iterations')
 
     if track_scores:
-        return partition, np.array(trace)
-    return partition
+        return partition, B, np.array(trace)
+    return partition, B
