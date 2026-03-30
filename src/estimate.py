@@ -261,7 +261,7 @@ def sbm_fast(G, k, *,
             w_pre = 1 / B.clip(EPS, None)
         elif likelihood == 'normal':
             w_pre = np.ones_like(B)
-        w_block = (w_pre * n.T).sum(axis=1) / n.sum()
+        w_block = (w_pre * n.T).sum(axis=1) / n_nodes
         w = w_block[partition]
 
         ## Compute gradients and hessian ##
@@ -409,7 +409,7 @@ def sbm_fast_drop(G, k0=None, *,
             w_pre = 1 / B.clip(EPS, None)
         elif likelihood == 'normal':
             w_pre = np.ones_like(B)
-        w_block = (w_pre * n.T).sum(axis=1) / n.sum()
+        w_block = (w_pre * n.T).sum(axis=1) / n_nodes
         w = w_block[partition]
 
         ## Compute gradients and hessian ##
@@ -419,7 +419,8 @@ def sbm_fast_drop(G, k0=None, *,
         grad = (A.T @ ZBW).T
 
         ## Modify hessian with inverse frequency penalty ##
-        hess += 1/gamma * np.diag(1 / Z.mean(0).clip(EPS, None))
+        inv_freq = n_nodes / n.squeeze() # =1/Z.mean(0)
+        hess += 1/gamma * np.diag(inv_freq.clip(EPS, None))
 
         ## Perform Fisher scoring updates ##
         Z_update = solve(hess, grad).T
