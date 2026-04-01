@@ -1,34 +1,54 @@
-"""Stochastic Block Model estimation as described in the [write-up](write_up.pdf).
-"""
-
 import networkx as nx
 import numpy as np
 import numpy.linalg as nla
 import scipy.linalg as sla
-from scipy.sparse import diags, csr_array
-
+from scipy.sparse import csr_array
 
 EPS = 1e-8
-VERBOSE = False
-
-
-def vprint(*args, **kwargs):
-    if VERBOSE:
-        print(*args, **kwargs)
-
-
-def hardmax(X):
-    Y = np.zeros_like(X)
-    Y[np.arange(X.shape[0]), X.argmax(1)] = 1
-    return Y
 
 
 def clog(x):
     return np.log(np.clip(x, EPS, None))
 
 
-def solve(A, b, *, min_scipy_size=20):
-    # Efficiently solve Ax=b
+def hardmax(X, sparse=True):
+    m, n = X.shape
+    cols = X.argmax(axis=1)
+    rows = np.arange(m)
+    data = np.ones(m, dtype=X.dtype)
+    if sparse:
+        Y = csr_array((data, (rows, cols)), shape=(m, n))
+    else:
+        Y = np.zeros((m, n), dtype=X.dtype)
+        Y[rows, cols] = data
+    return Y
+
+
+def usimplex(X, sparse=True):
+    m, n = X.shape
+    U = np.sort(X, axis=1)[:, ::-1]
+    cssv = np.cumsum(U, axis=1)
+    r = np.arange(1, n+1)
+    cond = U*r > (cssv-1)
+    rho = cond.sum(axis=1) - 1
+    theta = (cssv[np.arange(m), rho] - 1.) / (rho + 1.)
+    W = np.maximum(X - theta[:, None], 0.)
+    if sparse:
+        # if (W>0).mean() > 0.25: warnings.warn
+        W = csr_array(W)
+    return W
+
+
+def _inv_variance(X, likelihood):
+    if likelihood == 'bernoulli':
+        return 1 / (X * (1 - X)).clip(EPS, None)
+    if likelihood == 'poisson':
+        return 1 / X.clip(EPS, None)
+    if likelihood == 'normal':
+        return np.ones_like(X)
+
+
+def _solve(A, b, *, min_scipy_size=20):
     if A.shape[0] < min_scipy_size:
         x = nla.solve(A, b)
     else:
@@ -40,229 +60,68 @@ def solve(A, b, *, min_scipy_size=20):
     return x
 
 
-def sbm_slow(G, k, *,
-             likelihood='bernoulli',
-             alpha=0.,
-             weight=None,
-             track_scores=False,
-             max_iter=100,
-             min_iter=10,
-             tol=0.01):
-    """This approach implements the SBM estimation method exactly as derived in the write-up.
+def _fit(A, Z0, c0, B0,
+         likelihood='bernoulli',
+         degree_corrected=False,
+         overlapping=False,
+         alpha=0.,
+         track_scores=False,
+         max_iter=100,
+         min_iter=10,
+         tol=0.01):
 
-    Parameters
-    ----------
-    G : networkx.Graph
-        Input graph to fit the parameters to.
-    k : int
-        Number of communities to estimate.
-    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Likelihood used for the SBM (default 'bernoulli'), see write-up.
-    alpha : float, optional
-        Curvature smoothing parameter for the Fisher update (default 0.), see write-up.
-    weight : str or None, optional
-        Edge attribute to use as weight when constructing the adjacency matrix.
-    track_scores : bool, optional
-        If True, track and return a trace proportional to the log-likelihood per epoch.
-    max_iter : int, optional
-        Maximum number of iterations for estimation.
-    min_iter : int, optional
-        Minimum number of iterations before checking for early stopping.
-    tol : float, optional
-        Convergence tolerance for partition stability (fraction of unchanged nodes).
-
-    Returns
-    -------
-    partition : ndarray
-        Integer array of community assignments (shape: n_nodes,).
-    trace : ndarray, optional
-        If `track_scores` is True, returns a tuple (partition, trace) where ``trace``
-        is an array of scores proportional to the log-likelihoods per epoch.
-    """
-
-    ## Adjacency matrix ##
-    G = G.to_directed()
-    A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
+    Z, B = Z0.copy(), B0.copy()
+    n_nodes, k = Z.shape
+    assert A.shape == (n_nodes, n_nodes)
+    assert B.shape == (k, k)
     A_dense = A.toarray() if track_scores else None
 
-    if likelihood == 'bernoulli':
-        assert ((A.data==0) | (A.data==1)).all()
-    elif likelihood == 'poisson':
-        assert (A.data >= 0).all() and (A.data == A.data.round()).all()
-    elif likelihood == 'normal':
-        pass
+    expanded = overlapping or degree_corrected
+    if degree_corrected:
+        d = ((A.sum(1) + A.sum(0)) / 2.)[:, None]
+        c = c0.copy()
     else:
-        raise ValueError
+        d = None
+        c = np.array([1.])
 
-    ## Partition matrix ##
-    Z = hardmax(np.random.rand(len(G.nodes), k))
-    partition = Z.argmax(1)
-
-    ## Structure matrix sufficient statistics ##
-    M = Z.T @ (A @ Z)
+    M = (Z.T @ (A @ Z)).toarray()
     n = Z.sum(0)[:, None]
-    ## Structure matrix MLE ##
-    B = M / (n@n.T).clip(1, None)
-
-    ## Regularization ##
     R = np.eye(k) * alpha
+    A2 = None
 
     if track_scores:
-        vprint('tracking scores may significantly increase runtime')
-        ## Initialize trace of scores ##
-        P = Z@B@Z.T
-        if likelihood == 'bernoulli':
-            L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
-        elif likelihood == 'poisson':
-            L = A_dense * clog(P) - P
-        elif likelihood == 'normal':
-            L = -1/2 * (A_dense - P)**2
-        trace = [L.mean()]
-
-    for epoch in range(max_iter):
-
-        ## Compute predictions ##
-        P = np.clip(Z@B@Z.T, EPS, 1-EPS)
-        if likelihood == 'bernoulli':
-            w = (1 / P / (1-P)).mean(1)
-        elif likelihood == 'poisson':
-            w = (1 / P).mean(1)
-        elif likelihood == 'normal':
-            w = np.ones(len(G.nodes))
-
-        ## Perform Fisher scoring updates ##
-        W = diags(w)
-        hess = B.T @ Z.T @ (W @ Z) @ B + R
-        grad = (A.T @ W @ Z @ B).T
-        Z_update = nla.solve(hess, grad).T
-
-        ## Hardmax "projection" ##
-        Z = hardmax(Z_update)
-
-        ## Recompute structure matrix ##
-        M = Z.T @ (A @ Z)
-        n = Z.sum(0)[:, None]
-        B = M / (n@n.T).clip(1, None)
-
-        ## Early stopping ##
-        prev_partition = partition
-        partition = Z.argmax(1)
-        if epoch >= min_iter and (prev_partition == partition).mean() > 1-tol:
-            vprint('converged in', epoch+1, 'iterations')
-            break
-
-        ## Append current score to trace ##
-        if track_scores:
-            P = Z@B@Z.T
+        if expanded:
+            P = (Z @ B @ Z.T) * (c @ c.T)
             if likelihood == 'bernoulli':
                 L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
             elif likelihood == 'poisson':
                 L = A_dense * clog(P) - P
             elif likelihood == 'normal':
                 L = -1/2 * (A_dense - P)**2
-            trace.append(L.mean())
-
-    else:
-        vprint('did not converge after', max_iter, 'iterations')
-
-    if track_scores:
-        return partition, B, np.asarray(trace)
-    return partition, B
-
-
-def sbm_fast(G, k, *,
-             likelihood='bernoulli',
-             alpha=0.,
-             weight=None,
-             track_scores=False,
-             max_iter=100,
-             min_iter=10,
-             tol=0.01):
-    """This approach implements the SBM estimation method from the write-up but with better
-    computational efficiency.
-
-    Parameters
-    ----------
-    G : networkx.Graph
-        Input graph to fit the parameters to.
-    k : int
-        Number of communities to estimate.
-    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Likelihood used for the SBM (default 'bernoulli'), see write-up.
-    alpha : float, optional
-        Curvature smoothing parameter for the Fisher update (default 0.), see write-up.
-    weight : str or None, optional
-        Edge attribute to use as weight when constructing the adjacency matrix.
-    track_scores : bool, optional
-        If True, track and return a trace proportional to the log-likelihood per epoch.
-    max_iter : int, optional
-        Maximum number of iterations for estimation.
-    min_iter : int, optional
-        Minimum number of iterations before checking for early stopping.
-    tol : float, optional
-        Convergence tolerance for partition stability (fraction of unchanged nodes).
-
-    Returns
-    -------
-    partition : ndarray
-        Integer array of community assignments (shape: n_nodes,).
-    trace : ndarray, optional
-        If `track_scores` is True, returns a tuple (partition, trace) where ``trace``
-        is an array of scores proportional to the log-likelihoods per epoch.
-    """
-
-    ## Adjacency matrix ##
-    A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
-    n_nodes = len(G.nodes)
-
-    if likelihood == 'bernoulli':
-        assert ((A.data==0) | (A.data==1)).all()
-    elif likelihood == 'poisson':
-        assert (A.data >= 0).all() and (A.data == A.data.round()).all()
-    elif likelihood == 'normal':
-        pass
-    else:
-        raise ValueError
-
-    ## Partition matrix ##
-    partition = np.random.randint(k, size=n_nodes)
-    Z = csr_array((np.ones(n_nodes), (np.arange(n_nodes), partition)),
-                  shape=(n_nodes, k), dtype=float)
-
-    ## Structure matrix sufficient statistics ##
-    M = (Z.T @ (A @ Z)).toarray()
-    n = Z.sum(0)[:, None]
-    ## Structure matrix MLE ##
-    B = M / (n@n.T).clip(1, None)
-
-    ## Regularization ##
-    R = np.eye(k) * alpha
-
-    A2 = None # elementwise square of A
-    if track_scores:
-        vprint('tracking scores may increase runtime')
-        ## Initialize trace of scores ##
-        if likelihood == 'bernoulli':
-            L = M * clog(B) + (n@n.T - M) * clog(1-B)
-        elif likelihood == 'poisson':
-            L = M * clog(B) - (n@n.T) * B
-        elif likelihood == 'normal':
-            A2 = A.multiply(A)
-            M2 = (Z.T @ (A2 @ Z)).toarray()
-            L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
+            del P
+        else:
+            if likelihood == 'bernoulli':
+                L = M * clog(B) + (n@n.T - M) * clog(1-B)
+            elif likelihood == 'poisson':
+                L = M * clog(B) - (n@n.T) * B
+            elif likelihood == 'normal':
+                A2 = A.multiply(A)
+                M2 = (Z.T @ (A2 @ Z)).toarray()
+                L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
         trace = [L.sum()/n_nodes**2]
 
     for epoch in range(max_iter):
 
-        ## Compute predictions ##
-        if likelihood == 'bernoulli':
-            w_pre = 1 / (B * (1 - B)).clip(EPS, None)
-        elif likelihood == 'poisson':
-            w_pre = 1 / B.clip(EPS, None)
-        elif likelihood == 'normal':
-            w_pre = np.ones_like(B)
-        w_block = (w_pre * n.T).sum(axis=1) / n_nodes
-        w = w_block[partition]
+        ## Compute weights ##
+        if expanded:
+            P = (Z @ B @ Z.T) * (c @ c.T)
+            W = _inv_variance(P, likelihood)
+            w = W.mean(1)
+            del P
+        else:
+            w_pre = _inv_variance(B, likelihood)
+            w_block = (w_pre * n.T).sum(axis=1) / n_nodes
+            w = w_block[Z.indices]
 
         ## Compute gradients and hessian ##
         ZB = Z @ B
@@ -271,146 +130,122 @@ def sbm_fast(G, k, *,
         grad = (A.T @ ZBW).T
 
         ## Perform Fisher scoring updates ##
-        Z_update = solve(hess, grad).T
+        Z_update = _solve(hess, grad).T
 
         ## Update partition ##
-        prev_partition = partition
-        partition = Z_update.argmax(1)
-        Z.indices[:], Z.data[:] = partition, 1
+        Z_old = Z.copy()
+        if overlapping:
+            Z = usimplex(Z_update)
+        else:
+            Z.indices[:], Z.data[:] = Z_update.argmax(1), 1
 
         ## Recompute structure matrix ##
         M = (Z.T @ (A @ Z)).toarray()
         n = Z.sum(0)[:, None]
-        B = M / (n@n.T).clip(1, None)
+        B = M / (n @ n.T).clip(1, None)
+        if degree_corrected:
+            c = d / (Z @ Z.T @ d) * (Z @ n)
 
         ## Early stopping ##
-        if epoch >= min_iter and (prev_partition == partition).mean() > 1-tol:
-            vprint('converged in', epoch+1, 'iterations')
+        if epoch >= min_iter and (Z_old != Z).mean() < tol:
             break
 
-        ## Append current score to trace ##
         if track_scores:
+            if expanded:
+                P = (Z @ B @ Z.T) * (c @ c.T)
+                if likelihood == 'bernoulli':
+                    L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
+                elif likelihood == 'poisson':
+                    L = A_dense * clog(P) - P
+                elif likelihood == 'normal':
+                    L = -1/2 * (A_dense - P)**2
+                del P
+            else:
+                if likelihood == 'bernoulli':
+                    L = M * clog(B) + (n@n.T - M) * clog(1-B)
+                elif likelihood == 'poisson':
+                    L = M * clog(B) - (n@n.T) * B
+                elif likelihood == 'normal':
+                    M2 = (Z.T @ (A2 @ Z)).toarray()
+                    L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
+            trace.append(L.sum()/n_nodes**2)
+
+    else:
+        pass # warnings.warn
+
+    return {
+        'node_partition': Z,
+        'degree_correction': c if degree_corrected else None,
+        'block_probabilities': B,
+        'scores': np.array(trace) if track_scores else None,
+    }
+
+
+def _fit_drop(A, Z0, c0, B0,
+              likelihood='bernoulli',
+              degree_corrected=False,
+              overlapping=False,
+              alpha=0.,
+              gamma=0.,
+              min_size=3,
+              track_scores=False,
+              max_iter=100,
+              min_iter=10,
+              tol=0.01):
+
+    Z, B = Z0.copy(), B0.copy()
+    n_nodes, k = Z.shape
+    assert A.shape == (n_nodes, n_nodes)
+    assert B.shape == (k, k)
+    A_dense = A.toarray() if track_scores else None
+
+    expanded = overlapping or degree_corrected
+    if degree_corrected:
+        d = ((A.sum(1) + A.sum(0)) / 2.)[:, None]
+        c = c0.copy()
+    else:
+        d = None
+        c = np.array([1.])
+
+    M = (Z.T @ (A @ Z)).toarray()
+    n = Z.sum(0)[:, None]
+    R = np.eye(k) * alpha
+    A2 = None
+
+    n_comms = [k]
+    if track_scores:
+        if expanded:
+            P = (Z @ B @ Z.T) * (c @ c.T)
+            if likelihood == 'bernoulli':
+                L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
+            elif likelihood == 'poisson':
+                L = A_dense * clog(P) - P
+            elif likelihood == 'normal':
+                L = -1/2 * (A_dense - P)**2
+            del P
+        else:
             if likelihood == 'bernoulli':
                 L = M * clog(B) + (n@n.T - M) * clog(1-B)
             elif likelihood == 'poisson':
                 L = M * clog(B) - (n@n.T) * B
             elif likelihood == 'normal':
+                A2 = A.multiply(A)
                 M2 = (Z.T @ (A2 @ Z)).toarray()
                 L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
-            trace.append(L.sum()/n_nodes**2)
-
-    else:
-        vprint('did not converge after', max_iter, 'iterations')
-
-    if track_scores:
-        return partition, B, np.array(trace)
-    return partition, B
-
-
-def sbm_fast_drop(G, k0=None, *,
-                  min_size=3,
-                  likelihood='bernoulli',
-                  alpha=0.,
-                  gamma=0.1,
-                  weight=None,
-                  track_scores=False,
-                  max_iter=100,
-                  min_iter=10,
-                  tol=0.01):
-    """This approach extends sbm_fast by iteratively dropping small communities until
-    the appropriate number of communities is found.
-
-    Parameters
-    ----------
-    G : networkx.Graph
-        Input graph to fit the parameters to.
-    k0 : int
-        Initial/maximum number of communities to estimate.
-    min_size : int, optional
-        Minimum allowed community size, see write-up. Communities smaller than this are dropped.
-    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Likelihood used for the SBM (default 'bernoulli'), see write-up.
-    alpha : float, optional
-        Curvature smoothing parameter for the Fisher update (default 0.), see write-up.
-    gamma : float, optional
-        Penalty strength controlling the number of communities. A smaller value of gamma leads to
-        fewer communities. Equivalent to gamma=1/beta in write-up.
-    weight : str or None, optional
-        Edge attribute to use as weight when constructing the adjacency matrix.
-    track_scores : bool, optional
-        If True, track and return a trace proportional to the log-likelihood per epoch.
-    max_iter : int, optional
-        Maximum number of iterations for estimation.
-    min_iter : int, optional
-        Minimum number of iterations before checking for early stopping.
-    tol : float, optional
-        Convergence tolerance for partition stability (fraction of unchanged nodes).
-
-    Returns
-    -------
-    partition : ndarray
-        Integer array of community assignments (shape: n_nodes,).
-    trace : ndarray, optional
-        If ``track_scores`` is True, returns a tuple (partition, trace) where ``trace``
-        is an array of average log-likelihoods per epoch.
-    """
-
-    ## Adjacency matrix ##
-    A = nx.to_scipy_sparse_array(G, weight=weight).astype(float)
-    n_nodes = len(G.nodes)
-    if k0 is None:
-        n_comms = n_nodes // min_size
-    else:
-        n_comms = int(k0)
-
-    if likelihood == 'bernoulli':
-        assert ((A.data==0) | (A.data==1)).all()
-    elif likelihood == 'poisson':
-        assert (A.data >= 0).all() and (A.data == A.data.round()).all()
-    elif likelihood == 'normal':
-        pass
-    else:
-        raise ValueError
-
-    ## Partition matrix ##
-    partition = np.random.randint(n_comms, size=n_nodes)
-    Z = csr_array((np.ones(n_nodes), (np.arange(n_nodes), partition)),
-                  shape=(n_nodes, n_comms), dtype=float)
-
-    ## Structure matrix sufficient statistics ##
-    M = (Z.T @ (A @ Z)).toarray()
-    n = Z.sum(0)[:, None]
-    ## Structure matrix MLE ##
-    B = M / (n@n.T).clip(1, None)
-
-    ## Regularization ##
-    R = np.eye(n_comms) * alpha
-
-    A2 = None # elementwise square of A
-    if track_scores:
-        vprint('tracking scores may increase runtime')
-        ## Initialize trace of scores ##
-        if likelihood == 'bernoulli':
-            L = M * clog(B) + (n@n.T - M) * clog(1-B)
-        elif likelihood == 'poisson':
-            L = M * clog(B) - (n@n.T) * B
-        elif likelihood == 'normal':
-            A2 = A.multiply(A)
-            M2 = (Z.T @ (A2 @ Z)).toarray()
-            L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
         trace = [L.sum()/n_nodes**2]
 
     for epoch in range(max_iter):
 
-        ## Compute predictions ##
-        if likelihood == 'bernoulli':
-            w_pre = 1 / (B * (1 - B)).clip(EPS, None)
-        elif likelihood == 'poisson':
-            w_pre = 1 / B.clip(EPS, None)
-        elif likelihood == 'normal':
-            w_pre = np.ones_like(B)
-        w_block = (w_pre * n.T).sum(axis=1) / n_nodes
-        w = w_block[partition]
+        ## Compute weights ##
+        if expanded:
+            P = (Z @ B @ Z.T) * (c @ c.T)
+            W = _inv_variance(P, likelihood)
+            w = W.mean(1)
+            del P
+        else:
+            w_pre = _inv_variance(B, likelihood)
+            w_block = (w_pre * n.T).sum(axis=1) / n_nodes
+            w = w_block[Z.indices]
 
         ## Compute gradients and hessian ##
         ZB = Z @ B
@@ -423,49 +258,208 @@ def sbm_fast_drop(G, k0=None, *,
         hess += 1/gamma * np.diag(inv_freq)
 
         ## Perform Fisher scoring updates ##
-        Z_update = solve(hess, grad).T
+        Z_update = _solve(hess, grad).T
 
         ## Update partition ##
-        prev_partition = partition
-        partition = Z_update.argmax(1)
+        Z_old = Z.copy()
+        if overlapping:
+            Z = usimplex(Z_update)
+            mask = Z.sum(0) >= min_size
+        else:
+            Z.indices[:], Z.data[:] = Z_update.argmax(1), 1
+            mask = np.bincount(Z.indices, minlength=k) >= min_size
 
-        ## Get rid of unused communities for stability ##
-        mask = np.bincount(partition, minlength=n_comms) >= min_size
+        ## Drop unused communities for stability ##
         if (~mask).any():
             Z_update = Z_update[:, mask]
-            partition = Z_update.argmax(1)
-            n_comms = Z_update.shape[1]
-            R = np.eye(n_comms) * alpha
-            Z = csr_array((np.ones(n_nodes), (np.arange(n_nodes), partition)),
-                          shape=(n_nodes, n_comms), dtype=float)
+            k = Z_update.shape[1]
+            R = np.eye(k) * alpha
+            Z = usimplex(Z_update) if overlapping else hardmax(Z_update)
         else:
-            Z.indices[:] = partition
-            Z.data[:] = 1
+            if overlapping:
+                Z = usimplex(Z_update)
+            else:
+                Z.indices[:], Z.data[:] = Z_update.argmax(1), 1
 
         ## Recompute structure matrix ##
         M = (Z.T @ (A @ Z)).toarray()
         n = Z.sum(0)[:, None]
-        B = M / (n@n.T).clip(1, None)
+        B = M / (n @ n.T).clip(1, None)
+        if degree_corrected:
+            c = d / (Z @ Z.T @ d) * (Z @ n)
 
         ## Early stopping ##
-        if epoch >= min_iter and (prev_partition == partition).mean() > 1-tol:
-            vprint('converged in', epoch+1, 'iterations')
+        if epoch >= min_iter and Z_old.shape == Z.shape and (Z_old != Z).mean() < tol:
             break
 
-        ## Append current score to trace ##
         if track_scores:
-            if likelihood == 'bernoulli':
-                L = M * clog(B) + (n@n.T - M) * clog(1-B)
-            elif likelihood == 'poisson':
-                L = M * clog(B) - (n@n.T) * B
-            elif likelihood == 'normal':
-                M2 = (Z.T @ (A2 @ Z)).toarray()
-                L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
+            if expanded:
+                P = (Z @ B @ Z.T) * (c @ c.T)
+                if likelihood == 'bernoulli':
+                    L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
+                elif likelihood == 'poisson':
+                    L = A_dense * clog(P) - P
+                elif likelihood == 'normal':
+                    L = -1/2 * (A_dense - P)**2
+                del P
+            else:
+                if likelihood == 'bernoulli':
+                    L = M * clog(B) + (n@n.T - M) * clog(1-B)
+                elif likelihood == 'poisson':
+                    L = M * clog(B) - (n@n.T) * B
+                elif likelihood == 'normal':
+                    M2 = (Z.T @ (A2 @ Z)).toarray()
+                    L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
             trace.append(L.sum()/n_nodes**2)
+        n_comms.append(k)
 
     else:
-        vprint('did not converge after', max_iter, 'iterations')
+        pass # warnings.warn
 
-    if track_scores:
-        return partition, B, np.array(trace)
-    return partition, B
+    return {
+        'node_partition': Z,
+        'degree_correction': c if degree_corrected else None,
+        'block_probabilities': B,
+        'scores': np.array(trace) if track_scores else None,
+        'partition_sizes': n_comms,
+    }
+
+
+class SBM:
+
+    def __init__(self, graph, n_communities, *,
+                 likelihood='bernoulli',
+                 overlapping=False,
+                 degree_corrected=False,
+                 weight=None):
+
+        self.n_communities = n_communities
+        self.graph = graph
+        self.likelihood = likelihood
+        self.overlapping = overlapping
+        self.degree_corrected = degree_corrected
+        self.weight = weight
+
+        self._initialize_graph(self.graph)
+        self._initialize_parameters()
+
+        self.last_results = None
+
+    def _initialize_graph(self, graph):
+
+        self.adjacency = nx.to_scipy_sparse_array(graph, weight=self.weight).astype(float)
+
+        if self.likelihood == 'bernoulli':
+            assert ((self.adjacency.data==0) | (self.adjacency.data==1)).all()
+        elif self.likelihood == 'poisson':
+            assert (self.adjacency.data >= 0).all() and \
+                (self.adjacency.data == self.adjacency.data.round()).all()
+        elif self.likelihood == 'normal':
+            pass
+        else:
+            raise ValueError
+
+    def _initialize_parameters(self):
+
+        n_nodes = len(self.graph.nodes)
+        partition = np.random.randn(n_nodes, self.n_communities)
+        self.partition = usimplex(partition) if self.overlapping else hardmax(partition)
+
+        mutuals = (self.partition.T @ (self.adjacency @ self.partition)).toarray()
+        sizes = self.partition.sum(0)[:, None]
+        self.probabilities = mutuals / (sizes @ sizes.T).clip(1, None)
+
+        if self.degree_corrected:
+            degrees = ((self.adjacency.sum(1) + self.adjacency.sum(0)) / 2.)[:, None]
+            correction = degrees / (self.partition @ self.partition.T @ degrees)
+            self.correction = correction * (self.partition @ sizes)
+        else:
+            self.correction = None
+
+    def fit(self, *,
+            alpha=0.,
+            track_scores=False,
+            max_iter=100,
+            min_iter=10,
+            tol=0.01):
+
+        results = _fit(self.adjacency, self.partition, self.correction, self.probabilities,
+                       likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,
+                       alpha=alpha, track_scores=track_scores, max_iter=max_iter, min_iter=min_iter, tol=tol)
+
+        self.partition = results['node_partition']
+        self.c = results['degree_correction']
+        self.B = results['block_probabilities']
+
+        self.last_results = results
+
+        return self
+
+    def reset_graph(self, graph):
+        self._initialize_graph(graph)
+
+    def reset_parameters(self):
+        self._initialize_parameters()
+
+    def get_node_partition(self):
+        # return self.partition.toarray() if self.overlapping else self.partition.indices.copy()
+        return self.partition.toarray()
+
+    def get_degree_correction(self):
+        return self.correction.copy() if self.degree_corrected else None
+
+    def get_block_probabilities(self):
+        return self.probabilities.copy()
+
+
+class DropSBM(SBM):
+
+    def __init__(self, graph, n_communities_init=None, *,
+                 likelihood='bernoulli',
+                 overlapping=False,
+                 degree_corrected=False,
+                 weight=None,
+                 min_size=3):
+
+        self.n_communities_init = n_communities_init
+        self.min_size = min_size
+
+        super().__init__(
+            graph=graph,
+            n_communities=None,
+            likelihood=likelihood,
+            overlapping=overlapping,
+            degree_corrected=degree_corrected,
+            weight=weight,
+        )
+
+    def _initialize_parameters(self):
+
+        if self.n_communities_init is None:
+            self.n_communities = len(self.graph.nodes) // self.min_size
+        else:
+            self.n_communities = int(self.n_communities_init)
+
+        super()._initialize_parameters()
+
+    def fit(self, *,
+            alpha=0.,
+            gamma=1e-4,
+            track_scores=False,
+            max_iter=100,
+            min_iter=10,
+            tol=0.01):
+
+        results = _fit_drop(self.adjacency, self.partition, self.correction, self.probabilities,
+                            likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,
+                            min_size=self.min_size, alpha=alpha, gamma=gamma, track_scores=track_scores,
+                            max_iter=max_iter, min_iter=min_iter, tol=tol)
+
+        self.partition = results['node_partition']
+        self.correction = results['degree_correction']
+        self.probabilities = results['block_probabilities']
+        self.n_communities = self.partition.shape[1]
+
+        self.last_results = results
+
+        return self
