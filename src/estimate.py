@@ -254,7 +254,7 @@ def _fit_drop(A, Z0, c0, B0,
         grad = (A.T @ ZBW).T
 
         ## Modify hessian with inverse frequency penalty ##
-        inv_freq = n_nodes / n.squeeze().clip(1, None) # =1/Z.mean(0)
+        inv_freq = n_nodes / n.flatten().clip(1, None) # =1/Z.mean(0)
         hess += 1/gamma * np.diag(inv_freq)
 
         ## Perform Fisher scoring updates ##
