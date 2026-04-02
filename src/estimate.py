@@ -60,6 +60,45 @@ def _solve(A, b, *, min_scipy_size=20):
     return x
 
 
+class LikelihoodScorer:
+
+    def __init__(self, likelihood, adjacency, block_mode=False):
+        self.likelihood = likelihood
+        self.adjacency = adjacency
+        self.block_mode = block_mode
+        if self.block_mode:
+            self.adjacency_sq = self.adjacency.multiply(self.adjacency)
+            self.adjacency_de = None
+        else:
+            self.adjacency_sq = None
+            self.adjacency_de = self.adjacency.toarray()
+
+    def _block_scores(self, Z, B, M, n):
+        if self.likelihood == 'bernoulli':
+            return M * clog(B) + (n@n.T - M) * clog(1-B)
+        if self.likelihood == 'poisson':
+            return M * clog(B) - (n@n.T) * B
+        if self.likelihood == 'normal':
+            M2 = (Z.T @ (self.adjacency_sq @ Z)).toarray()
+            return -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
+
+    def _expanded_scores(self, Z, B, c):
+        P = (Z @ B @ Z.T) * (c @ c.T)
+        if self.likelihood == 'bernoulli':
+            return self.adjacency_de * clog(P) + (1-self.adjacency_de) * clog(1-P)
+        if self.likelihood == 'poisson':
+            return self.adjacency_de * clog(P) - P
+        if self.likelihood == 'normal':
+            return -1/2 * (self.adjacency_de - P)**2
+
+    def __call__(self, Z, B, c=None, M=None, n=None):
+        if self.block_mode:
+            L = self._block_scores(Z, B, M, n)
+        else:
+            L = self._expanded_scores(Z, B, c)
+        return L.sum() / Z.shape[0]**2
+
+
 def _fit(A, Z0, c0, B0,
          likelihood='bernoulli',
          degree_corrected=False,
@@ -74,9 +113,8 @@ def _fit(A, Z0, c0, B0,
     n_nodes, k = Z.shape
     assert A.shape == (n_nodes, n_nodes)
     assert B.shape == (k, k)
-    A_dense = A.toarray() if track_scores else None
 
-    expanded = overlapping or degree_corrected
+    block_mode = not (overlapping or degree_corrected)
     if degree_corrected:
         d = ((A.sum(1) + A.sum(0)) / 2.)[:, None]
         c = c0.copy()
@@ -87,41 +125,25 @@ def _fit(A, Z0, c0, B0,
     M = (Z.T @ (A @ Z)).toarray()
     n = Z.sum(0)[:, None]
     R = np.eye(k) * alpha
-    A2 = None
 
     if track_scores:
-        if expanded:
-            P = (Z @ B @ Z.T) * (c @ c.T)
-            if likelihood == 'bernoulli':
-                L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
-            elif likelihood == 'poisson':
-                L = A_dense * clog(P) - P
-            elif likelihood == 'normal':
-                L = -1/2 * (A_dense - P)**2
-            del P
-        else:
-            if likelihood == 'bernoulli':
-                L = M * clog(B) + (n@n.T - M) * clog(1-B)
-            elif likelihood == 'poisson':
-                L = M * clog(B) - (n@n.T) * B
-            elif likelihood == 'normal':
-                A2 = A.multiply(A)
-                M2 = (Z.T @ (A2 @ Z)).toarray()
-                L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
-        trace = [L.sum()/n_nodes**2]
+        scorer = LikelihoodScorer(likelihood, A, block_mode)
+        trace = [scorer(Z, B, c, M, n)]
+    else:
+        scorer = trace = None
 
     for epoch in range(max_iter):
 
         ## Compute weights ##
-        if expanded:
+        if block_mode:
+            w_pre = _inv_variance(B, likelihood)
+            w_block = (w_pre * n.T).sum(axis=1) / n_nodes
+            w = w_block[Z.indices]
+        else:
             P = (Z @ B @ Z.T) * (c @ c.T)
             W = _inv_variance(P, likelihood)
             w = W.mean(1)
             del P
-        else:
-            w_pre = _inv_variance(B, likelihood)
-            w_block = (w_pre * n.T).sum(axis=1) / n_nodes
-            w = w_block[Z.indices]
 
         ## Compute gradients and hessian ##
         ZB = Z @ B
@@ -151,24 +173,7 @@ def _fit(A, Z0, c0, B0,
             break
 
         if track_scores:
-            if expanded:
-                P = (Z @ B @ Z.T) * (c @ c.T)
-                if likelihood == 'bernoulli':
-                    L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
-                elif likelihood == 'poisson':
-                    L = A_dense * clog(P) - P
-                elif likelihood == 'normal':
-                    L = -1/2 * (A_dense - P)**2
-                del P
-            else:
-                if likelihood == 'bernoulli':
-                    L = M * clog(B) + (n@n.T - M) * clog(1-B)
-                elif likelihood == 'poisson':
-                    L = M * clog(B) - (n@n.T) * B
-                elif likelihood == 'normal':
-                    M2 = (Z.T @ (A2 @ Z)).toarray()
-                    L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
-            trace.append(L.sum()/n_nodes**2)
+            trace.append(scorer(Z, B, c, M, n))
 
     else:
         pass # warnings.warn
@@ -177,7 +182,7 @@ def _fit(A, Z0, c0, B0,
         'node_partition': Z,
         'degree_correction': c if degree_corrected else None,
         'block_probabilities': B,
-        'scores': np.array(trace) if track_scores else None,
+        'likelihood_scores': np.array(trace) if track_scores else None,
     }
 
 
@@ -197,9 +202,8 @@ def _fit_drop(A, Z0, c0, B0,
     n_nodes, k = Z.shape
     assert A.shape == (n_nodes, n_nodes)
     assert B.shape == (k, k)
-    A_dense = A.toarray() if track_scores else None
 
-    expanded = overlapping or degree_corrected
+    block_mode = not (overlapping or degree_corrected)
     if degree_corrected:
         d = ((A.sum(1) + A.sum(0)) / 2.)[:, None]
         c = c0.copy()
@@ -210,42 +214,26 @@ def _fit_drop(A, Z0, c0, B0,
     M = (Z.T @ (A @ Z)).toarray()
     n = Z.sum(0)[:, None]
     R = np.eye(k) * alpha
-    A2 = None
 
     n_comms = [k]
     if track_scores:
-        if expanded:
-            P = (Z @ B @ Z.T) * (c @ c.T)
-            if likelihood == 'bernoulli':
-                L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
-            elif likelihood == 'poisson':
-                L = A_dense * clog(P) - P
-            elif likelihood == 'normal':
-                L = -1/2 * (A_dense - P)**2
-            del P
-        else:
-            if likelihood == 'bernoulli':
-                L = M * clog(B) + (n@n.T - M) * clog(1-B)
-            elif likelihood == 'poisson':
-                L = M * clog(B) - (n@n.T) * B
-            elif likelihood == 'normal':
-                A2 = A.multiply(A)
-                M2 = (Z.T @ (A2 @ Z)).toarray()
-                L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
-        trace = [L.sum()/n_nodes**2]
+        scorer = LikelihoodScorer(likelihood, A, block_mode)
+        trace = [scorer(Z, B, c, M, n)]
+    else:
+        scorer = trace = None
 
     for epoch in range(max_iter):
 
         ## Compute weights ##
-        if expanded:
+        if block_mode:
+            w_pre = _inv_variance(B, likelihood)
+            w_block = (w_pre * n.T).sum(axis=1) / n_nodes
+            w = w_block[Z.indices]
+        else:
             P = (Z @ B @ Z.T) * (c @ c.T)
             W = _inv_variance(P, likelihood)
             w = W.mean(1)
             del P
-        else:
-            w_pre = _inv_variance(B, likelihood)
-            w_block = (w_pre * n.T).sum(axis=1) / n_nodes
-            w = w_block[Z.indices]
 
         ## Compute gradients and hessian ##
         ZB = Z @ B
@@ -292,26 +280,9 @@ def _fit_drop(A, Z0, c0, B0,
         if epoch >= min_iter and Z_old.shape == Z.shape and (Z_old != Z).mean() < tol:
             break
 
-        if track_scores:
-            if expanded:
-                P = (Z @ B @ Z.T) * (c @ c.T)
-                if likelihood == 'bernoulli':
-                    L = A_dense * clog(P) + (1-A_dense) * clog(1-P)
-                elif likelihood == 'poisson':
-                    L = A_dense * clog(P) - P
-                elif likelihood == 'normal':
-                    L = -1/2 * (A_dense - P)**2
-                del P
-            else:
-                if likelihood == 'bernoulli':
-                    L = M * clog(B) + (n@n.T - M) * clog(1-B)
-                elif likelihood == 'poisson':
-                    L = M * clog(B) - (n@n.T) * B
-                elif likelihood == 'normal':
-                    M2 = (Z.T @ (A2 @ Z)).toarray()
-                    L = -1/2 * (M2 - 2*B*M + (n@n.T) * B**2)
-            trace.append(L.sum()/n_nodes**2)
         n_comms.append(k)
+        if track_scores:
+            trace.append(scorer(Z, B, c, M, n))
 
     else:
         pass # warnings.warn
@@ -320,7 +291,7 @@ def _fit_drop(A, Z0, c0, B0,
         'node_partition': Z,
         'degree_correction': c if degree_corrected else None,
         'block_probabilities': B,
-        'scores': np.array(trace) if track_scores else None,
+        'likelihood_scores': np.array(trace) if track_scores else None,
         'partition_sizes': n_comms,
     }
 
