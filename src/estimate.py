@@ -321,14 +321,18 @@ class SBM:
         self.adjacency = nx.to_scipy_sparse_array(graph, weight=self.weight).astype(float)
 
         if self.likelihood == 'bernoulli':
-            assert ((self.adjacency.data==0) | (self.adjacency.data==1)).all()
+            condition = ((self.adjacency.data==0) | (self.adjacency.data==1)).all()
+            if not condition:
+                raise ValueError('`adjacency` can only hold 0 or 1 for bernoulli likelihood.')
         elif self.likelihood == 'poisson':
-            assert (self.adjacency.data >= 0).all() and \
+            condition = (self.adjacency.data >= 0).all() and \
                 (self.adjacency.data == self.adjacency.data.round()).all()
+            if not condition:
+                raise ValueError('`adjacency` can only hold non-negative integers for poisson likelihood.')
         elif self.likelihood == 'normal':
             pass
         else:
-            raise ValueError
+            raise ValueError('`likelihood` must be bernoulli, poisson, or normal.')
 
     def _initialize_parameters(self):
 
