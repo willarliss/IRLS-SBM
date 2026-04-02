@@ -166,7 +166,7 @@ def _fit(A, Z0, c0, B0,
         n = Z.sum(0)[:, None]
         B = M / (n @ n.T).clip(1, None)
         if degree_corrected:
-            c = d / (Z @ Z.T @ d) * (Z @ n)
+            c = d / (Z @ Z.T @ d).clip(1, None) * (Z @ n)
 
         ## Early stopping ##
         if epoch >= min_iter and (Z_old != Z).mean() < tol:
@@ -274,7 +274,7 @@ def _fit_drop(A, Z0, c0, B0,
         n = Z.sum(0)[:, None]
         B = M / (n @ n.T).clip(1, None)
         if degree_corrected:
-            c = d / (Z @ Z.T @ d) * (Z @ n)
+            c = d / (Z @ Z.T @ d).clip(1, None) * (Z @ n)
 
         ## Early stopping ##
         if epoch >= min_iter and Z_old.shape == Z.shape and (Z_old != Z).mean() < tol:
@@ -346,7 +346,7 @@ class SBM:
 
         if self.degree_corrected:
             degrees = ((self.adjacency.sum(1) + self.adjacency.sum(0)) / 2.)[:, None]
-            correction = degrees / (self.partition @ self.partition.T @ degrees)
+            correction = degrees / (self.partition @ self.partition.T @ degrees).clip(1, None)
             self.correction = correction * (self.partition @ sizes)
         else:
             self.correction = None
@@ -363,8 +363,8 @@ class SBM:
                        alpha=alpha, track_scores=track_scores, max_iter=max_iter, min_iter=min_iter, tol=tol)
 
         self.partition = results['node_partition']
-        self.c = results['degree_correction']
-        self.B = results['block_probabilities']
+        self.correction = results['degree_correction']
+        self.probabilities = results['block_probabilities']
 
         self.last_results = results
 
