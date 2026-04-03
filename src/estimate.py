@@ -129,7 +129,6 @@ def _fit(A, Z0, c0, B0,
 
     M = (Z.T @ (A @ Z)).toarray()
     n = Z.sum(0)[:, None]
-    R = np.eye(k) * alpha
 
     if track_scores:
         scorer = LikelihoodScorer(likelihood, A, block_mode)
@@ -153,8 +152,11 @@ def _fit(A, Z0, c0, B0,
         ## Compute gradients and hessian ##
         ZB = Z @ B
         ZBW = ZB * w[:, None]
-        hess = ZB.T @ ZBW + R
+        hess = ZB.T @ ZBW
         grad = (A.T @ ZBW).T
+
+        ## Modify hessian with curvature regularization ##
+        np.fill_diagonal(hess, hess.diagonal() + alpha)
 
         ## Perform Fisher scoring updates ##
         Z_update = _solve(hess, grad).T
@@ -196,7 +198,7 @@ def _fit_drop(A, Z0, c0, B0,
               degree_corrected=False,
               overlapping=False,
               alpha=0.,
-              gamma=1e-4,
+              gamma=1.,
               min_size=3,
               track_scores=False,
               max_iter=100,
@@ -218,7 +220,6 @@ def _fit_drop(A, Z0, c0, B0,
 
     M = (Z.T @ (A @ Z)).toarray()
     n = Z.sum(0)[:, None]
-    R = np.eye(k) * alpha
 
     n_comms = [k]
     if track_scores:
@@ -243,12 +244,13 @@ def _fit_drop(A, Z0, c0, B0,
         ## Compute gradients and hessian ##
         ZB = Z @ B
         ZBW = ZB * w[:, None]
-        hess = ZB.T @ ZBW + R
+        hess = ZB.T @ ZBW
         grad = (A.T @ ZBW).T
 
         ## Modify hessian with inverse frequency penalty ##
         inv_freq = n_nodes / n.flatten().clip(1, None) # =1/Z.mean(0)
-        hess += 1/gamma * np.diag(inv_freq)
+        inv_freq = inv_freq**gamma / (inv_freq**gamma).sum() * k + EPS
+        np.fill_diagonal(hess, hess.diagonal() + alpha*inv_freq)
 
         ## Perform Fisher scoring updates ##
         Z_update = _solve(hess, grad).T
@@ -266,7 +268,6 @@ def _fit_drop(A, Z0, c0, B0,
         if (~mask).any():
             Z_update = Z_update[:, mask]
             k = Z_update.shape[1]
-            R = np.eye(k) * alpha
             Z = usimplex(Z_update) if overlapping else hardmax(Z_update)
         else:
             if overlapping:
@@ -635,7 +636,7 @@ class DropSBM(SBM):
 
     def fit(self, *,
             alpha=0.,
-            gamma=1e-4,
+            gamma=1.,
             track_scores=False,
             max_iter=100,
             min_iter=10,
@@ -647,7 +648,7 @@ class DropSBM(SBM):
         alpha : float, optional
             Curvature smoothing parameter for the Fisher update (default 0.0).
         gamma : float, optional
-            Parameter controlling the rate at which communities are dropped during estimation (default 1e-4).
+            Parameter controlling the rate at which communities are dropped during estimation (default 1.0).
         track_scores : bool, optional
             Whether to track a trace proportional to the log-likelihood per epoch (default False).
         max_iter : int, optional
