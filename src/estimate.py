@@ -1,8 +1,11 @@
+import warnings
+
 import networkx as nx
 import numpy as np
 import numpy.linalg as nla
 import scipy.linalg as sla
 from scipy.sparse import csr_array
+
 
 EPS = 1e-8
 
@@ -34,7 +37,8 @@ def usimplex(X, sparse=True):
     theta = (cssv[np.arange(m), rho] - 1.) / (rho + 1.)
     W = np.maximum(X - theta[:, None], 0.)
     if sparse:
-        # if (W>0).mean() > 0.25: warnings.warn
+        if (W>0).mean() > 0.25:
+            warnings.warn('Constructing sparse matrix from dense data.')
         W = csr_array(W)
     return W
 
@@ -176,7 +180,7 @@ def _fit(A, Z0, c0, B0,
             trace.append(scorer(Z, B, c, M, n))
 
     else:
-        pass # warnings.warn
+        warnings.warn('Estimation did not converge.')
 
     return {
         'node_partition': Z,
@@ -285,7 +289,7 @@ def _fit_drop(A, Z0, c0, B0,
             trace.append(scorer(Z, B, c, M, n))
 
     else:
-        pass # warnings.warn
+        warnings.warn('Estimation did not converge.')
 
     return {
         'node_partition': Z,
@@ -297,6 +301,52 @@ def _fit_drop(A, Z0, c0, B0,
 
 
 class SBM:
+    """Stochastic Block Model estimation and inference. Functionality for standard, degree-corrected,
+    and overlapping models for bernoulli, poisson, and normally distributed edges.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        Input graph with which to estimate the parameters.
+    n_communities : int
+        Number of communities in the generative model.
+    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
+        Likelihood used for the SBM (default 'bernoulli'), should align with type of graph.
+    overlapping : bool, optional
+        Whether to allow overlapping community membership (default False).
+    degree_corrected : bool, optional
+        Whether to use degree-correction parameters to address degree heterogeneity (default False).
+    weight : str or None, optional
+        Edge attribute to use as weight when constructing the adjacency matrix.
+
+    Attributes
+    ----------
+    adjacency : scipy.sparse.csr_array
+        The adjacency matrix of the input graph.
+    partition : scipy.sparse.csr_array
+        The node partition matrix.
+    probabilities : numpy.ndarray
+        The block probability matrix.
+    correction : numpy.ndarray or None
+        The degree correction vector.
+    last_results : dict
+        The estimation results from the previous call to fit.
+
+    Methods
+    -------
+    fit
+        Estimate the SBM parameters.
+    reset_graph
+        Store a new graph internally.
+    reset_parameters
+        Re-initialize the SBM parameters.
+    get_node_partition
+        Return the node partition matrix.
+    get_degree_correction
+        Return the degree correction vector.
+    get_block_probabilities
+        Return the block probability matrix.
+    """
 
     def __init__(self, graph, n_communities, *,
                  likelihood='bernoulli',
@@ -305,20 +355,32 @@ class SBM:
                  weight=None):
 
         self.n_communities = n_communities
-        self.graph = graph
         self.likelihood = likelihood
         self.overlapping = overlapping
         self.degree_corrected = degree_corrected
         self.weight = weight
 
-        self._initialize_graph(self.graph)
-        self._initialize_parameters()
-
+        self.graph = None
+        self.adjacency = None
+        self.partition = None
+        self.probabilities = None
+        self.correction = None
         self.last_results = None
 
-    def _initialize_graph(self, graph):
+        self._validate_graph(graph)
+        self._initialize_parameters()
 
-        self.adjacency = nx.to_scipy_sparse_array(graph, weight=self.weight).astype(float)
+    def _validate_graph(self, graph):
+
+        if not isinstance(graph, nx.Graph):
+            raise ValueError('`graph` input must be an instance of networkx.Graph.')
+        if self.graph is not None:
+            if len(graph.nodes) != self.n_nodes:
+                warnings.warn('`graph` input has different number of nodes than current graph.')
+
+        self.graph = graph.copy()
+        self.n_nodes = len(graph.nodes)
+        self.adjacency = nx.to_scipy_sparse_array(self.graph, weight=self.weight).astype(float)
 
         if self.likelihood == 'bernoulli':
             condition = ((self.adjacency.data==0) | (self.adjacency.data==1)).all()
@@ -334,10 +396,46 @@ class SBM:
         else:
             raise ValueError('`likelihood` must be bernoulli, poisson, or normal.')
 
+    def _validate_parameters(self, partition=None, probabilities=None, correction=None):
+
+        if partition is not None:
+            if not isinstance(partition, csr_array):
+                raise ValueError('`partition` input must be an instance of scipy.sparse.csr_array.')
+            if partition.shape != (self.n_nodes, self.n_communities):
+                raise ValueError(
+                    f'`partition` input shape must be [{self.n_nodes}, {self.n_communities}].')
+            if (not self.overlapping) and (partition.data!=1).any():
+                raise ValueError('`partition` input must be all 0 or 1 for non-overlapping models.')
+            self.partition = partition.astype(float).copy()
+
+        if probabilities is not None:
+            if not isinstance(probabilities, np.ndarray):
+                raise ValueError('`probabilities` input must be an instance of numpy.ndarray.')
+            if probabilities.shape != (self.n_communities, self.n_communities):
+                raise ValueError(
+                    f'`probabilities` input shape must be [{self.n_communities}, {self.n_communities}].')
+            if self.likelihood == 'bernoulli' and ((probabilities<0)|(probabilities>1)).any():
+                raise ValueError('`probabilities` input must be in [0,1] for bernoulli likelihood.')
+            if self.likelihood == 'poisson' and (probabilities<0).any():
+                raise ValueError('`probabilities` input must be non-negative for poisson likelihood.')
+            self.probabilities = probabilities.astype(float).copy()
+
+        if correction is not None:
+            if self.degree_corrected:
+                if not isinstance(correction, np.ndarray):
+                    raise ValueError('`correction` input must be an instance of numpy.ndarray.')
+                if correction.shape != (self.n_nodes, 1):
+                    raise ValueError(
+                    f'`correction` input shape must be [{self.n_nodes}, 1].')
+                if (correction<0).any():
+                    raise ValueError('`correction` input must be non-negative.')
+                self.correction = correction.astype(float).copy()
+            else:
+                warnings.warn('`correction` input provided, but `degree_corrected` is False.')
+
     def _initialize_parameters(self):
 
-        n_nodes = len(self.graph.nodes)
-        partition = np.random.randn(n_nodes, self.n_communities)
+        partition = np.random.randn(self.n_nodes, self.n_communities)
         self.partition = usimplex(partition) if self.overlapping else hardmax(partition)
 
         mutuals = (self.partition.T @ (self.adjacency @ self.partition)).toarray()
@@ -357,6 +455,21 @@ class SBM:
             max_iter=100,
             min_iter=10,
             tol=0.01):
+        """Estimate the SBM parameters.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Curvature smoothing parameter for the Fisher update (default 0.0).
+        track_scores : bool, optional
+            Whether to track a trace proportional to the log-likelihood per epoch (default False).
+        max_iter : int, optional
+            Maximum number of iterations for estimation (default 100).
+        min_iter : int, optional
+            Minimum number of iterations before checking for early stopping (default 10).
+        tol : float, optional
+            Convergence tolerance for partition stability (default 0.01).
+        """
 
         results = _fit(self.adjacency, self.partition, self.correction, self.probabilities,
                        likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,
@@ -371,23 +484,87 @@ class SBM:
         return self
 
     def reset_graph(self, graph):
-        self._initialize_graph(graph)
+        """Store a new graph internally.
+        """
+        self._validate_graph(graph)
+        return self
 
-    def reset_parameters(self):
-        self._initialize_parameters()
+    def reset_parameters(self, *, partition=None, probabilities=None, correction=None):
+        """Re-initialize the SBM parameters.
+        """
+        if (partition is None) and (probabilities is None) and (correction is None):
+            self._initialize_parameters()
+        self._validate_parameters(partition, probabilities, correction)
+        return self
 
     def get_node_partition(self):
-        # return self.partition.toarray() if self.overlapping else self.partition.indices.copy()
+        """Return the node partition matrix [n,k].
+        """
         return self.partition.toarray()
+        # return self.partition.toarray() if self.overlapping else self.partition.indices.copy()
 
     def get_degree_correction(self):
+        """Return the degree correction vector [n,1].
+        """
         return self.correction.copy() if self.degree_corrected else None
 
     def get_block_probabilities(self):
+        """Return the block probability matrix [k,k].
+        """
         return self.probabilities.copy()
 
 
 class DropSBM(SBM):
+    """Stochastic Block Model estimation and inference when the number of communities is unknown.
+    Functionality for standard, degree-corrected, and overlapping models for bernoulli, poisson, and
+    normally distributed edges. The number of communities is identified by iteratively reducing
+    the parameter sizes during estimation.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        Input graph with which to estimate the parameters.
+    n_communities_init : int or None, optional
+        Initial number of communities in the generative model.
+    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
+        Likelihood used for the SBM (default 'bernoulli'), should align with type of graph.
+    overlapping : bool, optional
+        Whether to allow overlapping community membership (default False).
+    degree_corrected : bool, optional
+        Whether to use degree-correction parameters to address degree heterogeneity (default False).
+    weight : str or None, optional
+        Edge attribute to use as weight when constructing the adjacency matrix.
+    min_size : int, optional
+        The minimum number of nodes that constitutes a valid community (default 3).
+
+    Attributes
+    ----------
+    adjacency : scipy.sparse.csr_array
+        The adjacency matrix of the input graph.
+    partition : scipy.sparse.csr_array
+        The node partition matrix.
+    probabilities : numpy.ndarray
+        The block probability matrix.
+    correction : numpy.ndarray or None
+        The degree correction vector.
+    last_results : dict
+        The estimation results from the previous call to fit.
+
+    Methods
+    -------
+    fit
+        Estimate the SBM parameters.
+    reset_graph
+        Store a new graph internally.
+    reset_parameters
+        Re-initialize the SBM parameters.
+    get_node_partition
+        Return the node partition matrix.
+    get_degree_correction
+        Return the degree correction vector.
+    get_block_probabilities
+        Return the block probability matrix.
+    """
 
     def __init__(self, graph, n_communities_init=None, *,
                  likelihood='bernoulli',
@@ -424,6 +601,23 @@ class DropSBM(SBM):
             max_iter=100,
             min_iter=10,
             tol=0.01):
+        """Estimate the SBM parameters.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            Curvature smoothing parameter for the Fisher update (default 0.0).
+        gamma : float, optional
+            Parameter controlling the rate at which communities are dropped during estimation (default 1e-4).
+        track_scores : bool, optional
+            Whether to track a trace proportional to the log-likelihood per epoch (default False).
+        max_iter : int, optional
+            Maximum number of iterations for estimation (default 100).
+        min_iter : int, optional
+            Minimum number of iterations before checking for early stopping (default 10).
+        tol : float, optional
+            Convergence tolerance for partition stability (default 0.01).
+        """
 
         results = _fit_drop(self.adjacency, self.partition, self.correction, self.probabilities,
                             likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,
