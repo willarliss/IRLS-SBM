@@ -5,6 +5,7 @@ import numpy as np
 import numpy.linalg as nla
 import scipy.linalg as sla
 from scipy.sparse import csr_array
+from scipy.stats import bernoulli, poisson, norm
 
 
 EPS = 1e-8
@@ -301,7 +302,7 @@ def _fit_drop(A, Z0, c0, B0,
 
 
 class SBM:
-    """Stochastic Block Model estimation and inference. Functionality for standard, degree-corrected,
+    """Stochastic Block Model (SBM) estimation and inference. Functionality for standard, degree-corrected,
     and overlapping models for bernoulli, poisson, and normally distributed edges.
 
     Parameters
@@ -336,6 +337,8 @@ class SBM:
     -------
     fit
         Estimate the SBM parameters.
+    sample
+        Sample a graph according to the SBM parameters.
     reset_graph
         Store a new graph internally.
     reset_parameters
@@ -483,6 +486,40 @@ class SBM:
 
         return self
 
+    def sample(self, selfloops=True, create_using=None):
+        """Sample a graph according to the SBM parameters.
+
+        Parameters
+        ----------
+        selfloops : bool, optional
+            Whether to include self-loops or not (default True)
+        create_using : type or networkx.Graph or None, optional
+            Graph type to create. If graph instance, then cleared before populated.
+
+        Returns
+        -------
+        scipy.sparse.csr_array or nx.Graph
+            The sampled graph. If create_using is None, csr_array of the adjacency matrix is
+            returned. Otherwise, a Graph instance is returned.
+        """
+
+        edge_probas = self.partition @ self.probabilities @ self.partition.T
+        if self.degree_corrected:
+            edge_probas *= self.correction @ self.correction.T
+        if not selfloops:
+            np.fill_diagonal(edge_probas, 0)
+
+        distrs = {'bernoulli': bernoulli, 'poisson': poisson, 'normal': norm}
+        distr = distrs[self.likelihood](edge_probas)
+
+        adjacency = distr.rvs()
+        if create_using is None:
+            return adjacency
+
+        graph = nx.from_numpy_array(adjacency, create_using=create_using)
+
+        return graph
+
     def reset_graph(self, graph):
         """Store a new graph internally.
         """
@@ -515,10 +552,10 @@ class SBM:
 
 
 class DropSBM(SBM):
-    """Stochastic Block Model estimation and inference when the number of communities is unknown.
+    """Stochastic Block Model (SBM) estimation and inference when the number of communities is unknown.
     Functionality for standard, degree-corrected, and overlapping models for bernoulli, poisson, and
-    normally distributed edges. The number of communities is identified by iteratively reducing
-    the parameter sizes during estimation.
+    normally distributed edges. The number of communities is identified by iteratively dropping
+    parameters during estimation.
 
     Parameters
     ----------
@@ -554,6 +591,8 @@ class DropSBM(SBM):
     -------
     fit
         Estimate the SBM parameters.
+    sample
+        Sample a graph according to the SBM parameters.
     reset_graph
         Store a new graph internally.
     reset_parameters
