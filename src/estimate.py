@@ -107,7 +107,7 @@ class LikelihoodScorer:
         return L.sum() / Z.shape[0]**2
 
 
-def _fit(A, Z0, c0, B0,
+def _fit(A, Z0, B0, c0,
          likelihood='bernoulli',
          degree_corrected=False,
          overlapping=False,
@@ -196,7 +196,7 @@ def _fit(A, Z0, c0, B0,
     }
 
 
-def _fit_drop(A, Z0, c0, B0,
+def _fit_drop(A, Z0, B0, c0,
               likelihood='bernoulli',
               degree_corrected=False,
               overlapping=False,
@@ -440,11 +440,11 @@ class SBM:
             self.correction = None
 
     def fit(self, *,
-        alpha: float = 1e-4,
-        track_scores: bool = False,
-        max_iter: int = 100,
-        min_iter: int = 10,
-        tol: float = 0.01):
+            alpha: float = 1e-4,
+            track_scores: bool = False,
+            max_iter: int = 100,
+            min_iter: int = 10,
+            tol: float = 0.01):
         """Fit SBM parameters to the stored graph.
 
         Runs the iterative Fisher-scoring estimation procedure and updates
@@ -464,13 +464,13 @@ class SBM:
             Convergence tolerance on partition change (default: 0.01).
         """
 
-        results = _fit(self.adjacency, self.partition, self.correction, self.probabilities,
+        results = _fit(self.adjacency, self.partition, self.probabilities, self.correction,
                        likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,
                        alpha=alpha, track_scores=track_scores, max_iter=max_iter, min_iter=min_iter, tol=tol)
 
         self.partition = results['node_partition']
-        self.correction = results['degree_correction']
         self.probabilities = results['block_probabilities']
+        self.correction = results['degree_correction']
 
         self.last_results = results
 
@@ -540,17 +540,17 @@ class SBM:
         return self.partition.toarray()
         # return self.partition.toarray() if self.overlapping else self.partition.indices.copy()
 
-    def get_degree_correction(self) -> Optional[np.ndarray]:
-        """Return the degree-correction vector if degree correction is enabled, otherwise None.
-        Shape [n_nodes, 1].
-        """
-        return self.correction.copy() if self.degree_corrected else None
-
     def get_block_probabilities(self) -> np.ndarray:
         """Return the block probability/rate matrix.
         Shape is [n_communities, n_communities].
         """
         return self.probabilities.copy()
+
+    def get_degree_correction(self) -> Optional[np.ndarray]:
+        """Return the degree-correction vector if degree correction is enabled, otherwise None.
+        Shape [n_nodes, 1].
+        """
+        return self.correction.copy() if self.degree_corrected else None
 
 
 class DropSBM(SBM):
@@ -607,12 +607,12 @@ class DropSBM(SBM):
         super()._initialize_parameters()
 
     def fit(self, *,
-        alpha: float = 1.,
-        gamma: float = 1.,
-        track_scores: bool = False,
-        max_iter: int = 100,
-        min_iter: int = 10,
-        tol: float = 0.01):
+            alpha: float = 1.,
+            gamma: float = 1.,
+            track_scores: bool = False,
+            max_iter: int = 100,
+            min_iter: int = 10,
+            tol: float = 0.01):
         """Fit the SBM while adaptively dropping small communities.
 
         Parameters
@@ -632,14 +632,14 @@ class DropSBM(SBM):
             Convergence tolerance on partition change (default: 0.01).
         """
 
-        results = _fit_drop(self.adjacency, self.partition, self.correction, self.probabilities,
+        results = _fit_drop(self.adjacency, self.partition, self.probabilities, self.correction,
                             likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,
                             min_size=self.min_size, alpha=alpha, gamma=gamma, track_scores=track_scores,
                             max_iter=max_iter, min_iter=min_iter, tol=tol)
 
         self.partition = results['node_partition']
-        self.correction = results['degree_correction']
         self.probabilities = results['block_probabilities']
+        self.correction = results['degree_correction']
         self.n_communities = self.partition.shape[1]
 
         self.last_results = results
