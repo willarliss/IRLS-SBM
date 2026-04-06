@@ -176,7 +176,7 @@ def _fit(A, Z0, B0, c0,
         n = Z.sum(0)[:, None]
         B = M / (n @ n.T).clip(1, None)
         if degree_corrected:
-            c = d / (Z @ Z.T @ d).clip(1, None) * (Z @ n)
+            c = d / (Z @ (Z.T @ d)).clip(1, None) * (Z @ n)
 
         ## Early stopping ##
         if epoch >= min_iter and (Z_old != Z).mean() < tol:
@@ -283,7 +283,7 @@ def _fit_drop(A, Z0, B0, c0,
         n = Z.sum(0)[:, None]
         B = M / (n @ n.T).clip(1, None)
         if degree_corrected:
-            c = d / (Z @ Z.T @ d).clip(1, None) * (Z @ n)
+            c = d / (Z @ (Z.T @ d)).clip(1, None) * (Z @ n)
 
         ## Early stopping ##
         if epoch >= min_iter and Z_old.shape == Z.shape and (Z_old != Z).mean() < tol:
