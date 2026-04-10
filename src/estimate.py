@@ -142,19 +142,19 @@ def _fit(A, Z0, B0, c0,
     for epoch in range(max_iter):
 
         ## Compute weights ##
+        ZB = Z @ B
         if block_mode:
             w_pre = _inv_variance(B, likelihood)
             w_block = (w_pre * n.T).sum(axis=1) / n_nodes
             w = w_block[Z.indices]
         else:
-            P = (Z @ B @ Z.T) * (c @ c.T)
+            P = (ZB @ Z.T) * (c @ c.T)
             W = _inv_variance(P, likelihood)
             w = W.mean(1)
             del P
+        ZBW = ZB * w[:, None]
 
         ## Compute gradients and hessian ##
-        ZB = Z @ B
-        ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW
         grad = (A.T @ ZBW).T
 
@@ -234,19 +234,19 @@ def _fit_drop(A, Z0, B0, c0,
     for epoch in range(max_iter):
 
         ## Compute weights ##
+        ZB = Z @ B
         if block_mode:
             w_pre = _inv_variance(B, likelihood)
             w_block = (w_pre * n.T).sum(axis=1) / n_nodes
             w = w_block[Z.indices]
         else:
-            P = (Z @ B @ Z.T) * (c @ c.T)
+            P = (ZB @ Z.T) * (c @ c.T)
             W = _inv_variance(P, likelihood)
             w = W.mean(1)
             del P
+        ZBW = ZB * w[:, None]
 
         ## Compute gradients and hessian ##
-        ZB = Z @ B
-        ZBW = ZB * w[:, None]
         hess = ZB.T @ ZBW
         grad = (A.T @ ZBW).T
 
