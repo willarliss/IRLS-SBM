@@ -600,7 +600,7 @@ class DropSBM(SBM):
     def _initialize_parameters(self):
 
         if self.n_communities_init is None:
-            self.n_communities = len(self.graph.nodes) // self.min_size
+            self.n_communities = self.n_nodes // self.min_size
         else:
             self.n_communities = int(self.n_communities_init)
 
