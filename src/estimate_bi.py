@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import warnings
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 
 import networkx as nx
 import numpy as np
-import numpy.linalg as nla
-import scipy.linalg as sla
 from scipy.sparse import csr_array
-from scipy.stats import bernoulli, poisson, norm
 
-from .estimate import usimplex, hardmax, clog, EPS, _inv_variance, _solve
+from .estimate import usimplex, hardmax, clog, EPS, DISTRS, _inv_variance, _solve
 
 nxb = nx.bipartite
 
 
-class LikelihoodScorer:
+class BiLikelihoodScorer:
 
     def __init__(self, likelihood, biadjacency, block_mode=False):
         self.likelihood = likelihood
@@ -89,7 +86,7 @@ def _fit(A, Z0, B0, c0,
     nr = Zr.sum(0)[:, None]
 
     if track_scores:
-        scorer = LikelihoodScorer(likelihood, A, block_mode)
+        scorer = BiLikelihoodScorer(likelihood, A, block_mode)
         trace = [scorer((Zl, Zr), B, (cl, cr), M, (nl, nr))]
     else:
         scorer = trace = None
@@ -202,7 +199,7 @@ def _fit_drop(A, Z0, B0, c0,
 
     n_comms = [(kl, kr)]
     if track_scores:
-        scorer = LikelihoodScorer(likelihood, A, block_mode)
+        scorer = BiLikelihoodScorer(likelihood, A, block_mode)
         trace = [scorer((Zl, Zr), B, (cl, cr), M, (nl, nr))]
     else:
         scorer = trace = None
@@ -486,6 +483,108 @@ class BiSBM:
 
         return self
 
+    def sample(self,
+               create_using: Optional[Union[type, nx.Graph]] = None
+               ) -> Union[np.ndarray, nx.Graph]:
+        """Generate a random bipartite graph sampled from the current model.
+
+        Samples the biadjacency matrix according to the chosen likelihood and the
+        current parameters (partitions, block probabilities, and optional degree
+        corrections).
+
+        Parameters
+        ----------
+        create_using : type or networkx.Graph or None, optional
+            If provided, return a NetworkX bipartite graph of that type; otherwise
+            return the raw biadjacency ndarray. When a graph is returned, left
+            nodes are labeled 0..n_l-1 and right nodes are labeled n_l..n_l+n_r-1
+            and the sampled value is stored as the edge attribute ``weight``.
+
+        Returns
+        -------
+        numpy.ndarray or networkx.Graph
+            The sampled biadjacency matrix (ndarray) or a NetworkX graph when
+            ``create_using`` is supplied.
+        """
+
+        edge_probas = self.partition_l @ self.probabilities @ self.partition_r.T
+        if self.degree_corrected:
+            edge_probas = edge_probas * (self.correction_l @ self.correction_r.T)
+
+        distr = DISTRS[self.likelihood](edge_probas)
+
+        biadjacency = distr.rvs()
+        if create_using is None:
+            return biadjacency
+
+        G = nx.empty_graph(create_using=create_using)
+        n_nodes_l, n_nodes_r = biadjacency.shape
+        G.add_nodes_from(range(0, n_nodes_l), bipartite=0)
+        G.add_nodes_from(range(n_nodes_l, n_nodes_l+n_nodes_r), bipartite=1)
+        rows, cols = np.nonzero(biadjacency)
+        for i, j in zip(rows, cols):
+            G.add_edge(i, n_nodes_l+j, weight=biadjacency[i,j])
+
+        return G
+
+    def reset_graph(self, graph: nx.Graph):
+        """Replace the stored graph and rebuild the internal biadjacency matrix.
+
+        The provided graph is validated and copied into this instance via
+        :meth:`_validate_graph`.
+        """
+        self._validate_graph(graph)
+        return self
+
+    def reset_parameters(self, *,
+                         partitions: Optional[Tuple[csr_array, csr_array]] = None,
+                         probabilities: Optional[np.ndarray] = None,
+                         corrections: Optional[Tuple[np.ndarray, np.ndarray]] = None):
+        """Reset or update model parameters.
+
+        If no arguments are provided the parameters are randomly initialized. Any
+        supplied inputs are validated and set on the instance.
+
+        Parameters
+        ----------
+        partitions : tuple of (csr_array, csr_array), optional
+            Left and right partitions (sparse csr_array). Each must have shape
+            (n_nodes_l, n_communities_l) and (n_nodes_r, n_communities_r),
+            respectively.
+        probabilities : numpy.ndarray, optional
+            Block probability / rate matrix of shape (n_communities_l, n_communities_r).
+        corrections : tuple of (np.ndarray, np.ndarray), optional
+            Left and right degree-correction vectors (shaped [(n_nodes_l,1),(n_nodes_r,1)]).
+        """
+        if (partitions is None) and (probabilities is None) and (corrections is None):
+            self._initialize_parameters()
+        self._validate_parameters(partitions, probabilities, corrections)
+        return self
+
+    def get_node_partition(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Return the node-to-community partitions for both sides as dense arrays.
+
+        Returns
+        -------
+        tuple
+            (partition_l, partition_r) where each element is a dense ndarray with
+            shapes (n_nodes_l, n_communities_l) and (n_nodes_r, n_communities_r),
+            respectively.
+        """
+        return self.partition_l.toarray(), self.partition_r.toarray()
+
+    def get_block_probabilities(self) -> np.ndarray:
+        """Return the block probability/rate matrix.
+        Shape is [n_communities_l, n_communities_r]."""
+        return self.probabilities.copy()
+
+    def get_degree_correction(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Return the left and right degree-correction vectors if degree correction is enabled,
+        otherwise None. Shapes [(n_nodes_l, 1), (n_nodes_r, 1)]."""
+        if self.degree_corrected:
+            return self.correction_l.copy(), self.correction_r.copy()
+        return None
+
 
 class DropBiSBM(BiSBM):
     """Bipartite SBM estimator that discovers the number of communities by dropping small communities.
@@ -507,9 +606,12 @@ class DropBiSBM(BiSBM):
         If True, use degree correction (default: False).
     weight : str or None, optional
         Edge attribute to use as weight when building the biadjacency matrix.
-    min_size : int, optional
-        Minimum community size; communities smaller than this may be dropped
-        during estimation (default: 3).
+    min_size : int or tuple, optional
+        Minimum community size. If an int is provided it is applied to both
+        left and right sides; alternatively provide a tuple
+        ``(min_size_l, min_size_r)`` to set per-side thresholds. Communities
+        smaller than the threshold may be dropped during estimation
+        (default: 3).
     """
 
     def __init__(self, graph, n_communities_init=None, *,
@@ -517,7 +619,7 @@ class DropBiSBM(BiSBM):
                  overlapping: bool = False,
                  degree_corrected: bool = False,
                  weight: Optional[str] = None,
-                 min_size: Union[int, tuple] = 3) -> None:
+                 min_size: Union[tuple, int] = 3) -> None:
 
         if isinstance(n_communities_init, tuple):
             self.n_communities_init_l, self.n_communities_init_r = n_communities_init

@@ -12,6 +12,7 @@ from scipy.stats import bernoulli, poisson, norm
 
 
 EPS = 1e-8
+DISTRS = {'bernoulli': bernoulli, 'poisson': poisson, 'normal': norm}
 
 
 def clog(x):
@@ -503,8 +504,7 @@ class SBM:
         if not selfloops:
             np.fill_diagonal(edge_probas, 0)
 
-        distrs = {'bernoulli': bernoulli, 'poisson': poisson, 'normal': norm}
-        distr = distrs[self.likelihood](edge_probas)
+        distr = DISTRS[self.likelihood](edge_probas)
 
         adjacency = distr.rvs()
         if create_using is None:
