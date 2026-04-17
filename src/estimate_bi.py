@@ -103,8 +103,7 @@ def _fit(A, Z0, B0, c0,
         else:
             P = (Zl @ B @ Zr.T) * (cl @ cr.T)
             W = _inv_variance(P, likelihood)
-            wl = W.mean(1)
-            wr = W.mean(0)
+            wl, wr = W.mean(1), W.mean(0)
             del P
 
         ## Compute left gradients and hessian ##
@@ -207,7 +206,7 @@ def _fit_drop(A, Z0, B0, c0,
     if isinstance(min_size, tuple):
         min_size_l, min_size_r = min_size
     else:
-        min_size_l = min_size_r = int(min_size)
+        min_size_l = min_size_r = min_size
 
     for epoch in range(max_iter):
 
@@ -221,8 +220,7 @@ def _fit_drop(A, Z0, B0, c0,
         else:
             P = (Zl @ B @ Zr.T) * (cl @ cr.T)
             W = _inv_variance(P, likelihood)
-            wl = W.mean(1)
-            wr = W.mean(0)
+            wl, wr = W.mean(1), W.mean(0)
             del P
 
         ## Compute left gradients and hessian ##
@@ -257,13 +255,13 @@ def _fit_drop(A, Z0, B0, c0,
         Zl_old, Zr_old = Zl.copy(), Zr.copy()
         if overlapping:
             Zl = usimplex(Zl_update)
-            mask_l = Zl.sum(0) >= min_size_l
             Zr = usimplex(Zr_update)
+            mask_l = Zl.sum(0) >= min_size_l
             mask_r = Zr.sum(0) >= min_size_r
         else:
             Zl.indices[:], Zl.data[:] = Zl_update.argmax(1), 1
-            mask_l = np.bincount(Zl.indices, minlength=kl) >= min_size_l
             Zr.indices[:], Zr.data[:] = Zr_update.argmax(1), 1
+            mask_l = np.bincount(Zl.indices, minlength=kl) >= min_size_l
             mask_r = np.bincount(Zr.indices, minlength=kr) >= min_size_r
 
         ## Drop unused communities for stability ##
@@ -355,13 +353,11 @@ class BiSBM:
         self.biadjacency = nxb.biadjacency_matrix(self.graph, nodes_l, nodes_r, weight=self.weight).astype(float)
 
         if self.likelihood == 'bernoulli':
-            condition = ((self.biadjacency.data==0) | (self.biadjacency.data==1)).all()
-            if not condition:
+            if not ((self.biadjacency.data==0) | (self.biadjacency.data==1)).all():
                 raise ValueError('`adjacency` can only hold 0 or 1 for bernoulli likelihood.')
         elif self.likelihood == 'poisson':
-            condition = (self.biadjacency.data >= 0).all() and \
-                (self.biadjacency.data == self.biadjacency.data.round()).all()
-            if not condition:
+            if not ((self.biadjacency.data >= 0).all() and \
+                (self.biadjacency.data == self.biadjacency.data.round()).all()):
                 raise ValueError('`adjacency` can only hold non-negative integers for poisson likelihood.')
         elif self.likelihood == 'normal':
             pass
