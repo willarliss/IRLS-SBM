@@ -5,68 +5,9 @@ from typing import Optional, Union
 
 import networkx as nx
 import numpy as np
-import numpy.linalg as nla
-import scipy.linalg as sla
 from scipy.sparse import csr_array
-from scipy.stats import bernoulli, poisson, norm
 
-
-EPS = 1e-8
-DISTRS = {'bernoulli': bernoulli, 'poisson': poisson, 'normal': norm}
-
-
-def clog(x):
-    return np.log(np.clip(x, EPS, None))
-
-
-def hardmax(X, sparse=True):
-    m, n = X.shape
-    cols = X.argmax(axis=1)
-    rows = np.arange(m)
-    data = np.ones(m, dtype=X.dtype)
-    if sparse:
-        Y = csr_array((data, (rows, cols)), shape=(m, n))
-    else:
-        Y = np.zeros((m, n), dtype=X.dtype)
-        Y[rows, cols] = data
-    return Y
-
-
-def usimplex(X, sparse=True):
-    m, n = X.shape
-    U = np.sort(X, axis=1)[:, ::-1]
-    cssv = np.cumsum(U, axis=1)
-    r = np.arange(1, n+1)
-    cond = U*r > (cssv-1)
-    rho = cond.sum(axis=1) - 1
-    theta = (cssv[np.arange(m), rho] - 1.) / (rho + 1.)
-    W = np.maximum(X - theta[:, None], 0.)
-    if sparse:
-        if (W>0).mean() > 0.25:
-            warnings.warn('Constructing sparse matrix from dense data.')
-        W = csr_array(W)
-    return W
-
-
-def _inv_variance(X, likelihood):
-    if likelihood == 'bernoulli':
-        return 1 / (X * (1 - X)).clip(EPS, None)
-    if likelihood == 'poisson':
-        return 1 / X.clip(EPS, None)
-    if likelihood == 'normal':
-        return np.ones_like(X)
-
-
-def _solve(A, b, *, min_scipy_size=20):
-    if A.shape[0] < min_scipy_size:
-        x = nla.solve(A, b)
-    else:
-        try:
-            L = sla.cho_factor(A, check_finite=False)
-            x = sla.cho_solve(L, b, check_finite=False)
-        except sla.LinAlgError:
-            x = nla.solve(A, b)
-    return x
+from .misc import usimplex, hardmax, clog, inv_variance, solve, BaseSBM, EPS, DISTRS
 
 
 class LikelihoodScorer:
@@ -145,12 +86,12 @@ def _fit(A, Z0, B0, c0,
         ## Compute weights ##
         ZB = Z @ B
         if block_mode:
-            w_pre = _inv_variance(B, likelihood)
+            w_pre = inv_variance(B, likelihood)
             w_block = (w_pre * n.T).sum(axis=1) / n_nodes
             w = w_block[Z.indices]
         else:
             P = (ZB @ Z.T) * (c @ c.T)
-            W = _inv_variance(P, likelihood)
+            W = inv_variance(P, likelihood)
             w = W.mean(1)
             del P
         ZBW = ZB * w[:, None]
@@ -163,7 +104,7 @@ def _fit(A, Z0, B0, c0,
         np.fill_diagonal(hess, hess.diagonal() + alpha)
 
         ## Perform Fisher scoring updates ##
-        Z_update = _solve(hess, grad).T
+        Z_update = solve(hess, grad).T
 
         ## Update partition ##
         Z_old = Z.copy()
@@ -237,12 +178,12 @@ def _fit_drop(A, Z0, B0, c0,
         ## Compute weights ##
         ZB = Z @ B
         if block_mode:
-            w_pre = _inv_variance(B, likelihood)
+            w_pre = inv_variance(B, likelihood)
             w_block = (w_pre * n.T).sum(axis=1) / n_nodes
             w = w_block[Z.indices]
         else:
             P = (ZB @ Z.T) * (c @ c.T)
-            W = _inv_variance(P, likelihood)
+            W = inv_variance(P, likelihood)
             w = W.mean(1)
             del P
         ZBW = ZB * w[:, None]
@@ -257,7 +198,7 @@ def _fit_drop(A, Z0, B0, c0,
         np.fill_diagonal(hess, hess.diagonal() + alpha*inv_freq)
 
         ## Perform Fisher scoring updates ##
-        Z_update = _solve(hess, grad).T
+        Z_update = solve(hess, grad).T
 
         ## Update partition ##
         Z_old = Z.copy()
@@ -306,7 +247,7 @@ def _fit_drop(A, Z0, B0, c0,
     }
 
 
-class SBM:
+class SBM(BaseSBM):
     """Estimate and sample a Stochastic Block Model (SBM). Supports standard, degree-corrected,
     and overlapping community models with Bernoulli, Poisson, or normal edge likelihoods.
 
@@ -445,7 +386,6 @@ class SBM:
             min_iter: int = 10,
             tol: float = 0.01):
         """Fit SBM parameters to the stored graph.
-
         Runs the iterative Fisher-scoring estimation procedure and updates
         this instance's `partition`, `probabilities`, and `correction`.
 
@@ -479,7 +419,9 @@ class SBM:
                selfloops: bool = True,
                create_using: Optional[Union[type, nx.Graph]] = None
                ) -> Union[np.ndarray, nx.Graph]:
-        """Generate a random graph from the current SBM parameters.
+        """Generate a random graph from the current SBM parameters. Samples the
+        adjacency matrix according to the chosen likelihood and the current
+        parameters (partitions, block probabilities, and optional degree corrections).
 
         Parameters
         ----------
@@ -513,8 +455,8 @@ class SBM:
         return graph
 
     def reset_graph(self, graph: nx.Graph):
-        """Replace the stored graph and rebuild internal adjacency matrix. The provided
-        graph is validated and copied into this instance.
+        """Replace the stored graph and rebuild internal adjacency matrix.
+        The provided graph is validated and copied into this instance.
         """
         self._validate_graph(graph)
         return self
@@ -523,8 +465,9 @@ class SBM:
                          partition: Optional[csr_array] = None,
                          probabilities: Optional[np.ndarray] = None,
                          correction: Optional[np.ndarray] = None):
-        """Reset or update the model parameters. If no arguments are provided, parameters are
-        randomly initialized. Any supplied inputs are validated and set on the instance.
+        """Reset or update the model parameters.
+        If no arguments are provided, the parameters are randomly initialized.
+        Any supplied inputs are validated and set on the instance.
         """
         if (partition is None) and (probabilities is None) and (correction is None):
             self._initialize_parameters()

@@ -7,7 +7,7 @@ import networkx as nx
 import numpy as np
 from scipy.sparse import csr_array
 
-from .estimate import usimplex, hardmax, clog, EPS, DISTRS, _inv_variance, _solve
+from .misc import usimplex, hardmax, clog, inv_variance, solve, BaseSBM, EPS, DISTRS
 
 nxb = nx.bipartite
 
@@ -95,14 +95,14 @@ def _fit(A, Z0, B0, c0,
 
         ## Compute weights ##
         if block_mode:
-            w_pre = _inv_variance(B, likelihood)
+            w_pre = inv_variance(B, likelihood)
             w_block_l = (w_pre * nr.T).sum(axis=1) / n_nodes_r
             wl = w_block_l[Zl.indices]
             w_block_r = (w_pre * nl).sum(axis=0) / n_nodes_l
             wr = w_block_r[Zr.indices]
         else:
             P = (Zl @ B @ Zr.T) * (cl @ cr.T)
-            W = _inv_variance(P, likelihood)
+            W = inv_variance(P, likelihood)
             wl, wr = W.mean(1), W.mean(0)
             del P
 
@@ -114,7 +114,7 @@ def _fit(A, Z0, B0, c0,
         ## Modify left hessian with curvature regularization ##
         np.fill_diagonal(hess, hess.diagonal() + alpha)
         ## Perform Fisher scoring updates ##
-        Zl_update = _solve(hess, grad).T
+        Zl_update = solve(hess, grad).T
 
         ## Compute left gradients and hessian ##
         ZB = Zl @ B
@@ -124,7 +124,7 @@ def _fit(A, Z0, B0, c0,
         ## Modify left hessian with curvature regularization ##
         np.fill_diagonal(hess, hess.diagonal() + alpha)
         ## Perform Fisher scoring updates ##
-        Zr_update = _solve(hess, grad).T
+        Zr_update = solve(hess, grad).T
 
         ## Update partition ##
         Zl_old, Zr_old = Zl.copy(), Zr.copy()
@@ -212,14 +212,14 @@ def _fit_drop(A, Z0, B0, c0,
 
         ## Compute weights ##
         if block_mode:
-            w_pre = _inv_variance(B, likelihood)
+            w_pre = inv_variance(B, likelihood)
             w_block_l = (w_pre * nr.T).sum(axis=1) / n_nodes_r
             wl = w_block_l[Zl.indices]
             w_block_r = (w_pre * nl).sum(axis=0) / n_nodes_l
             wr = w_block_r[Zr.indices]
         else:
             P = (Zl @ B @ Zr.T) * (cl @ cr.T)
-            W = _inv_variance(P, likelihood)
+            W = inv_variance(P, likelihood)
             wl, wr = W.mean(1), W.mean(0)
             del P
 
@@ -235,7 +235,7 @@ def _fit_drop(A, Z0, B0, c0,
         np.fill_diagonal(hess_l, hess_l.diagonal() + alpha*inv_freq_l)
 
         ## Perform Fisher scoring updates (left) ##
-        Zl_update = _solve(hess_l, grad_l).T
+        Zl_update = solve(hess_l, grad_l).T
 
         ## Compute right gradients and hessian ##
         ZB = Zl @ B
@@ -249,7 +249,7 @@ def _fit_drop(A, Z0, B0, c0,
         np.fill_diagonal(hess_r, hess_r.diagonal() + alpha*inv_freq_r)
 
         ## Perform Fisher scoring updates (right) ##
-        Zr_update = _solve(hess_r, grad_r).T
+        Zr_update = solve(hess_r, grad_r).T
 
         ## Update partition ##
         Zl_old, Zr_old = Zl.copy(), Zr.copy()
@@ -312,7 +312,44 @@ def _fit_drop(A, Z0, B0, c0,
     }
 
 
-class BiSBM:
+class BiSBM(BaseSBM):
+    """Estimate and sample a bipartite Stochastic Block Model (BiSBM).
+    Supports standard, degree-corrected, and overlapping community models
+    with Bernoulli, Poisson, or normal edge likelihoods on bipartite graphs.
+
+    Parameters
+    ----------
+    graph : networkx.Graph
+        Input bipartite graph to operate on. Must be a NetworkX graph with
+        node sets for the two bipartite sides.
+    n_communities : int or tuple
+        Number of communities. If a tuple is provided it should be
+            `(n_communities_l, n_communities_r)` specifying counts for left and
+        right node partitions respectively.
+    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
+        Edge distribution to use (default: 'bernoulli').
+    overlapping : bool, optional
+        If True, allow overlapping community membership (default: False).
+    degree_corrected : bool, optional
+        If True, use per-node degree correction (default: False).
+    weight : str or None, optional
+        Edge data attribute to use as weight when building the biadjacency matrix.
+
+    Attributes
+    ----------
+    biadjacency : scipy.sparse.csr_array
+        Biadjacency matrix for the stored bipartite graph.
+    partition_l, partition_r : scipy.sparse.csr_array
+        Left and right node-to-community assignment matrices with shapes
+            `(n_nodes_l, n_communities_l)` and `(n_nodes_r, n_communities_r)`.
+    probabilities : numpy.ndarray
+        Block probability / rate matrix of shape `(n_communities_l, n_communities_r)`.
+    correction_l, correction_r : numpy.ndarray or None
+        Degree-correction vectors for left and right nodes when enabled,
+        otherwise None. Shapes `(n_nodes_l, 1)` and `(n_nodes_r, 1)`.
+    last_results : dict or None
+        Raw results returned by the most recent call to :meth:`fit`.
+    """
 
     def __init__(self, graph: nx.Graph, n_communities: Union[tuple, int], *,
                  likelihood: str = 'bernoulli',
@@ -445,10 +482,10 @@ class BiSBM:
             max_iter: int = 100,
             min_iter: int = 10,
             tol: float = 0.01):
-        """Fit SBM parameters to the stored graph.
-
+        """Fit BiSBM parameters to the stored bipartite graph.
         Runs the iterative Fisher-scoring estimation procedure and updates
-        this instance's `partition_l`, `partition_r`, `probabilities`, and `correction_l`, `correction_r`.
+        this instance's `partition_l`, `partition_r`, `probabilities`, and `correction_l`,
+        `correction_r`.
 
         Parameters
         ----------
@@ -482,8 +519,7 @@ class BiSBM:
     def sample(self,
                create_using: Optional[Union[type, nx.Graph]] = None
                ) -> Union[np.ndarray, nx.Graph]:
-        """Generate a random bipartite graph sampled from the current model.
-
+        """Generate a random bipartite graph from the current BiSBM parameters.
         Samples the biadjacency matrix according to the chosen likelihood and the
         current parameters (partitions, block probabilities, and optional degree
         corrections).
@@ -494,13 +530,13 @@ class BiSBM:
             If provided, return a NetworkX bipartite graph of that type; otherwise
             return the raw biadjacency ndarray. When a graph is returned, left
             nodes are labeled 0..n_l-1 and right nodes are labeled n_l..n_l+n_r-1
-            and the sampled value is stored as the edge attribute ``weight``.
+            and the sampled value is stored as the edge attribute `weight`.
 
         Returns
         -------
         numpy.ndarray or networkx.Graph
             The sampled biadjacency matrix (ndarray) or a NetworkX graph when
-            ``create_using`` is supplied.
+            `create_using` is supplied.
         """
 
         edge_probas = self.partition_l @ self.probabilities @ self.partition_r.T
@@ -525,9 +561,7 @@ class BiSBM:
 
     def reset_graph(self, graph: nx.Graph):
         """Replace the stored graph and rebuild the internal biadjacency matrix.
-
-        The provided graph is validated and copied into this instance via
-        :meth:`_validate_graph`.
+        The provided graph is validated and copied into this instance.
         """
         self._validate_graph(graph)
         return self
@@ -537,9 +571,8 @@ class BiSBM:
                          probabilities: Optional[np.ndarray] = None,
                          corrections: Optional[Tuple[np.ndarray, np.ndarray]] = None):
         """Reset or update model parameters.
-
-        If no arguments are provided the parameters are randomly initialized. Any
-        supplied inputs are validated and set on the instance.
+        If no arguments are provided, the parameters are randomly initialized.
+        Any supplied inputs are validated and set on the instance.
 
         Parameters
         ----------
@@ -558,7 +591,7 @@ class BiSBM:
         return self
 
     def get_node_partition(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Return the node-to-community partitions for both sides as dense arrays.
+        """Return the node-to-community partition matrices for both sides as dense arrays.
 
         Returns
         -------
@@ -571,7 +604,8 @@ class BiSBM:
 
     def get_block_probabilities(self) -> np.ndarray:
         """Return the block probability/rate matrix.
-        Shape is [n_communities_l, n_communities_r]."""
+        Shape is [n_communities_l, n_communities_r].
+        """
         return self.probabilities.copy()
 
     def get_degree_correction(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
@@ -605,7 +639,7 @@ class DropBiSBM(BiSBM):
     min_size : int or tuple, optional
         Minimum community size. If an int is provided it is applied to both
         left and right sides; alternatively provide a tuple
-        ``(min_size_l, min_size_r)`` to set per-side thresholds. Communities
+    `(min_size_l, min_size_r)` to set per-side thresholds. Communities
         smaller than the threshold may be dropped during estimation
         (default: 3).
     """
