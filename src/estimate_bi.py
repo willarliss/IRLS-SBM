@@ -7,7 +7,8 @@ import networkx as nx
 import numpy as np
 from scipy.sparse import csr_array
 
-from .misc import usimplex, hardmax, clog, inv_variance, solve, argmaxH, BaseSBM, EPS, DISTRS
+from .misc import usimplex, hardmax, clog, inv_variance, solve, BaseSBM, EPS, DISTRS
+from .initialization import init_lookup
 
 nxb = nx.bipartite
 
@@ -54,32 +55,6 @@ class BiLikelihoodScorer:
         else:
             L = self._expanded_scores(Z, B, c)
         return L.sum() / Zl.shape[0] / Zr.shape[0]
-
-
-def _optimal_projection(Z_update, A, likelihood, alpha, d=None):
-    Zl, Zr = usimplex(Z_update[0]), usimplex(Z_update[1])
-    M = (Zl.T @ (A @ Zr)).toarray()
-    nl = Zl.sum(0)[:, None]
-    nr = Zr.sum(0)[:, None]
-    B = M / (nl @ nr.T).clip(1, None)
-    dl, dr = d
-    if dl is None and dr is None:
-        cl = cr = np.array([1.])
-    else:
-        cl = dl / (Zl @ (Zl.T @ dl)).clip(1, None) * (Zl @ nl)
-        cr = dr / (Zr @ (Zr.T @ dr)).clip(1, None) * (Zr @ nr)
-    W = inv_variance((Zl @ B @ Zr.T) * (cl @ cr.T), likelihood)
-    ZB = Zr @ B.T
-    ZBW = ZB * W.mean(0)[:, None]
-    hess = ZB.T @ ZBW
-    np.fill_diagonal(hess, hess.diagonal() + alpha)
-    idx_l = argmaxH(Z_update[0], hess)
-    ZB = Zl @ B
-    ZBW = ZB * W.mean(1)[:, None]
-    hess = ZB.T @ ZBW
-    np.fill_diagonal(hess, hess.diagonal() + alpha)
-    idx_r = argmaxH(Z_update[1], hess)
-    return idx_l, idx_r
 
 
 def _fit(A, Z0, B0, c0,
@@ -181,22 +156,6 @@ def _fit(A, Z0, B0, c0,
 
     else:
         warnings.warn('Estimation did not converge.')
-
-    if converged and not overlapping:
-        # Recompute optimal projection using "unconstrained" hessians
-        idx_l, idx_r = _optimal_projection((Zl_update, Zr_update), A, likelihood, alpha, (dl, dr))
-        Zl.indices[:], Zl.data[:] = idx_l, 1
-        Zr.indices[:], Zr.data[:] = idx_r, 1
-        # Recompute structure matrix
-        M = (Zl.T @ (A @ Zr)).toarray()
-        nl = Zl.sum(0)[:, None]
-        nr = Zr.sum(0)[:, None]
-        B = M / (nl @ nr.T).clip(1, None)
-        if degree_corrected:
-            cl = dl / (Zl @ (Zl.T @ dl)).clip(1, None) * (Zl @ nl)
-            cr = dr / (Zr @ (Zr.T @ dr)).clip(1, None) * (Zr @ nr)
-        if track_scores:
-            trace.append(scorer((Zl, Zr), B, (cl, cr), M, (nl, nr)))
 
     return {
         'left_node_partition': Zl,
@@ -346,22 +305,6 @@ def _fit_drop(A, Z0, B0, c0,
     else:
         warnings.warn('Estimation did not converge.')
 
-    if converged and not overlapping:
-        # Recompute optimal projection using "unconstrained" hessians
-        idx_l, idx_r = _optimal_projection((Zl_update, Zr_update), A, likelihood, alpha, (dl, dr))
-        Zl.indices[:], Zl.data[:] = idx_l, 1
-        Zr.indices[:], Zr.data[:] = idx_r, 1
-        # Recompute structure matrix
-        M = (Zl.T @ (A @ Zr)).toarray()
-        nl = Zl.sum(0)[:, None]
-        nr = Zr.sum(0)[:, None]
-        B = M / (nl @ nr.T).clip(1, None)
-        if degree_corrected:
-            cl = dl / (Zl @ (Zl.T @ dl)).clip(1, None) * (Zl @ nl)
-            cr = dr / (Zr @ (Zr.T @ dr)).clip(1, None) * (Zr @ nr)
-        if track_scores:
-            trace.append(scorer((Zl, Zr), B, (cl, cr), M, (nl, nr)))
-
     return {
         'left_node_partition': Zl,
         'right_node_partition': Zr,
@@ -395,6 +338,11 @@ class BiSBM(BaseSBM):
         If True, use per-node degree correction (default: False).
     weight : str or None, optional
         Edge data attribute to use as weight when building the biadjacency matrix.
+    community_init : str, optional
+        Name of the initialization routine to use. For bipartite initialization
+        routines the name must end with '_bi'. The value must be a key in `initialization.init_lookup`.
+    community_init_kwargs : dict or None, optional
+        Additional keyword arguments forwarded to the initializer function.
 
     Attributes
     ----------
@@ -402,7 +350,7 @@ class BiSBM(BaseSBM):
         Biadjacency matrix for the stored bipartite graph.
     partition_l, partition_r : scipy.sparse.csr_array
         Left and right node-to-community assignment matrices with shapes
-            `(n_nodes_l, n_communities_l)` and `(n_nodes_r, n_communities_r)`.
+        `(n_nodes_l, n_communities_l)` and `(n_nodes_r, n_communities_r)`.
     probabilities : numpy.ndarray
         Block probability / rate matrix of shape `(n_communities_l, n_communities_r)`.
     correction_l, correction_r : numpy.ndarray or None
@@ -416,7 +364,9 @@ class BiSBM(BaseSBM):
                  likelihood: str = 'bernoulli',
                  overlapping: bool = False,
                  degree_corrected: bool = False,
-                 weight: Optional[str] = None):
+                 weight: Optional[str] = None,
+                 community_init: str = 'random',
+                 community_init_kwargs: Optional[dict] = None):
 
         if isinstance(n_communities, tuple):
             self.n_communities_l, self.n_communities_r = n_communities
@@ -426,6 +376,8 @@ class BiSBM(BaseSBM):
         self.overlapping = overlapping
         self.degree_corrected = degree_corrected
         self.weight = weight
+        self.community_init = community_init
+        self.community_init_kwargs = community_init_kwargs
 
         self.graph = None
         self.biadjacency = None
@@ -516,6 +468,30 @@ class BiSBM(BaseSBM):
                 warnings.warn('`corrections` input provided, but `degree_corrected` is False.')
 
     def _initialize_parameters(self):
+
+        if not self.community_init.endswith('bi'):
+            raise ValueError('`community_init` must be "*_bi".')
+        try:
+            init_func = init_lookup[self.community_init]
+        except KeyError as err:
+            raise ValueError(f"Unknown `community_init`: '{self.community_init}'.") from err
+
+        kwargs = self.community_init_kwargs or {}
+        if self.overlapping:
+            kwargs['overlap'] = kwargs.get('overlap', 0.01)
+        else:
+            kwargs['overlap'] = None
+
+        partition_l, partition_r = init_func(self.graph, **kwargs)
+        if partition_l.shape[1] != self.n_communities_l:
+            warnings.warn('Initialized partition does not match `n_communities`. '
+                          f'`self.n_communities_l` is overwritten to {partition_l.shape[1]}.')
+            self.n_communities_l = partition_l.shape[1]
+        if partition_r.shape[1] != self.n_communities_r:
+            warnings.warn('Initialized partition does not match `n_communities`. '
+                          f'`self.n_communities_r` is overwritten to {partition_r.shape[1]}.')
+            self.n_communities_r = partition_r.shape[1]
+        self.partition_l, self.partition_r = partition_l, partition_r
 
         partition_l = np.random.randn(self.n_nodes_l, self.n_communities_l)
         self.partition_l = usimplex(partition_l) if self.overlapping else hardmax(partition_l)
