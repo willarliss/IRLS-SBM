@@ -8,6 +8,7 @@ import numpy as np
 from scipy.sparse import csr_array
 
 from .misc import usimplex, hardmax, clog, inv_variance, solve, BaseSBM, EPS, DISTRS
+from .initialization import init_lookup
 
 
 class LikelihoodScorer:
@@ -81,6 +82,7 @@ def _fit(A, Z0, B0, c0,
     else:
         scorer = trace = None
 
+    converged = False
     for epoch in range(max_iter):
 
         ## Compute weights ##
@@ -121,7 +123,8 @@ def _fit(A, Z0, B0, c0,
             c = d / (Z @ (Z.T @ d)).clip(1, None) * (Z @ n)
 
         ## Early stopping ##
-        if epoch >= min_iter and (Z_old != Z).mean() < tol:
+        converged = (Z_old != Z).mean() < tol
+        if epoch >= min_iter and converged:
             break
 
         if track_scores:
@@ -173,6 +176,7 @@ def _fit_drop(A, Z0, B0, c0,
     else:
         scorer = trace = None
 
+    converged = False
     for epoch in range(max_iter):
 
         ## Compute weights ##
@@ -228,7 +232,8 @@ def _fit_drop(A, Z0, B0, c0,
             c = d / (Z @ (Z.T @ d)).clip(1, None) * (Z @ n)
 
         ## Early stopping ##
-        if epoch >= min_iter and Z_old.shape == Z.shape and (Z_old != Z).mean() < tol:
+        converged = Z_old.shape == Z.shape and (Z_old != Z).mean() < tol
+        if epoch >= min_iter and converged:
             break
 
         n_comms.append(k)
@@ -265,6 +270,11 @@ class SBM(BaseSBM):
         If True, use per-node degree correction (default: False).
     weight : str or None, optional
         Edge data attribute to use as weight when building the adjacency matrix.
+    community_init : str, optional
+        Name of the initialization routine to use. Must match a key in
+        `initialization.init_lookup`.
+    community_init_kwargs : dict or None, optional
+        Additional keyword arguments forwarded to the initializer function.
 
     Attributes
     ----------
@@ -284,13 +294,17 @@ class SBM(BaseSBM):
                  likelihood: str = 'bernoulli',
                  overlapping: bool = False,
                  degree_corrected: bool = False,
-                 weight: Optional[str] = None):
+                 weight: Optional[str] = None,
+                 community_init: str = 'random',
+                 community_init_kwargs: Optional[dict] = None):
 
         self.n_communities = n_communities
         self.likelihood = likelihood
         self.overlapping = overlapping
         self.degree_corrected = degree_corrected
         self.weight = weight
+        self.community_init = community_init
+        self.community_init_kwargs = community_init_kwargs
 
         self.graph = None
         self.adjacency = None
@@ -365,8 +379,25 @@ class SBM(BaseSBM):
 
     def _initialize_parameters(self):
 
-        partition = np.random.randn(self.n_nodes, self.n_communities)
-        self.partition = usimplex(partition) if self.overlapping else hardmax(partition)
+        if self.community_init.endswith('bi'):
+            raise ValueError('`community_init` must not be *_bi".')
+        try:
+            init_func = init_lookup[self.community_init]
+        except KeyError as err:
+            raise ValueError(f"Unknown `community_init`: '{self.community_init}'.") from err
+
+        kwargs = self.community_init_kwargs or {}
+        if self.overlapping:
+            kwargs['overlap'] = kwargs.get('overlap', 0.01)
+        else:
+            kwargs['overlap'] = None
+
+        partition = init_func(self.graph, **kwargs)
+        if partition.shape[1] != self.n_communities:
+            warnings.warn('Initialized partition does not match `n_communities`. '
+                          f'`self.n_communities` is overwritten to {partition.shape[1]}.')
+            self.n_communities = partition.shape[1]
+        self.partition = partition
 
         mutuals = (self.partition.T @ (self.adjacency @ self.partition)).toarray()
         sizes = self.partition.sum(0)[:, None]
