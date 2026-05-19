@@ -15,26 +15,6 @@ def clog(x):
     return np.log(np.clip(x, EPS, None))
 
 
-def argmaxH(X, H=None):
-    if H is None:
-        return X.argmax(1)
-    costs = np.diag(H)[None, :] - 2 * (X @ H)
-    return costs.argmin(1)
-
-
-def hardmaxH(X, H=None, sparse=True):
-    m, n = X.shape
-    cols = argmaxH(X, H)
-    rows = np.arange(m)
-    data = np.ones(m, dtype=X.dtype)
-    if sparse:
-        Y = csr_array((data, (rows, cols)), shape=(m, n))
-    else:
-        Y = np.zeros((m, n), dtype=X.dtype)
-        Y[rows, cols] = data
-    return Y
-
-
 def hardmax(X, sparse=True):
     m, n = X.shape
     cols = X.argmax(axis=1)
