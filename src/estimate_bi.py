@@ -7,7 +7,7 @@ import networkx as nx
 import numpy as np
 from scipy.sparse import csr_array
 
-from .misc import usimplex, hardmax, clog, inv_variance, solve, BaseSBM, EPS, DISTRS
+from .misc import usimplex, hardmax, clog, inv_variance, solve, argmaxH, BaseSBM, EPS, DISTRS
 from .initialization import init_lookup
 
 nxb = nx.bipartite
@@ -55,6 +55,32 @@ class BiLikelihoodScorer:
         else:
             L = self._expanded_scores(Z, B, c)
         return L.sum() / Zl.shape[0] / Zr.shape[0]
+
+
+def _optimal_projection(Z_update, A, likelihood, alpha, d=None):
+    Zl, Zr = usimplex(Z_update[0]), usimplex(Z_update[1])
+    M = (Zl.T @ (A @ Zr)).toarray()
+    nl = Zl.sum(0)[:, None]
+    nr = Zr.sum(0)[:, None]
+    B = M / (nl @ nr.T).clip(1, None)
+    dl, dr = d
+    if dl is None and dr is None:
+        cl = cr = np.array([1.])
+    else:
+        cl = dl / (Zl @ (Zl.T @ dl)).clip(1, None) * (Zl @ nl)
+        cr = dr / (Zr @ (Zr.T @ dr)).clip(1, None) * (Zr @ nr)
+    W = inv_variance((Zl @ B @ Zr.T) * (cl @ cr.T), likelihood)
+    ZB = Zr @ B.T
+    ZBW = ZB * W.mean(0)[:, None]
+    hess = ZB.T @ ZBW
+    np.fill_diagonal(hess, hess.diagonal() + alpha)
+    idx_l = argmaxH(Z_update[0], hess)
+    ZB = Zl @ B
+    ZBW = ZB * W.mean(1)[:, None]
+    hess = ZB.T @ ZBW
+    np.fill_diagonal(hess, hess.diagonal() + alpha)
+    idx_r = argmaxH(Z_update[1], hess)
+    return idx_l, idx_r
 
 
 def _fit(A, Z0, B0, c0,
@@ -156,6 +182,22 @@ def _fit(A, Z0, B0, c0,
 
     else:
         warnings.warn('Estimation did not converge.')
+
+    if converged and not overlapping:
+        # Recompute optimal projection using "unconstrained" hessians
+        idx_l, idx_r = _optimal_projection((Zl_update, Zr_update), A, likelihood, alpha, (dl, dr))
+        Zl.indices[:], Zl.data[:] = idx_l, 1
+        Zr.indices[:], Zr.data[:] = idx_r, 1
+        # Recompute structure matrix
+        M = (Zl.T @ (A @ Zr)).toarray()
+        nl = Zl.sum(0)[:, None]
+        nr = Zr.sum(0)[:, None]
+        B = M / (nl @ nr.T).clip(1, None)
+        if degree_corrected:
+            cl = dl / (Zl @ (Zl.T @ dl)).clip(1, None) * (Zl @ nl)
+            cr = dr / (Zr @ (Zr.T @ dr)).clip(1, None) * (Zr @ nr)
+        if track_scores:
+            trace.append(scorer((Zl, Zr), B, (cl, cr), M, (nl, nr)))
 
     return {
         'left_node_partition': Zl,
@@ -304,6 +346,22 @@ def _fit_drop(A, Z0, B0, c0,
 
     else:
         warnings.warn('Estimation did not converge.')
+
+    if converged and not overlapping:
+        # Recompute optimal projection using "unconstrained" hessians
+        idx_l, idx_r = _optimal_projection((Zl_update, Zr_update), A, likelihood, alpha, (dl, dr))
+        Zl.indices[:], Zl.data[:] = idx_l, 1
+        Zr.indices[:], Zr.data[:] = idx_r, 1
+        # Recompute structure matrix
+        M = (Zl.T @ (A @ Zr)).toarray()
+        nl = Zl.sum(0)[:, None]
+        nr = Zr.sum(0)[:, None]
+        B = M / (nl @ nr.T).clip(1, None)
+        if degree_corrected:
+            cl = dl / (Zl @ (Zl.T @ dl)).clip(1, None) * (Zl @ nl)
+            cr = dr / (Zr @ (Zr.T @ dr)).clip(1, None) * (Zr @ nr)
+        if track_scores:
+            trace.append(scorer((Zl, Zr), B, (cl, cr), M, (nl, nr)))
 
     return {
         'left_node_partition': Zl,

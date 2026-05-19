@@ -7,7 +7,7 @@ import networkx as nx
 import numpy as np
 from scipy.sparse import csr_array
 
-from .misc import usimplex, hardmax, clog, inv_variance, solve, BaseSBM, EPS, DISTRS
+from .misc import usimplex, hardmax, argmaxH, clog, inv_variance, solve, BaseSBM, EPS, DISTRS
 from .initialization import init_lookup
 
 
@@ -48,6 +48,24 @@ class LikelihoodScorer:
         else:
             L = self._expanded_scores(Z, B, c)
         return L.sum() / Z.shape[0]**2
+
+
+def _optimal_projection(Z_update, A, likelihood, alpha, d=None):
+    Z = usimplex(Z_update)
+    M = (Z.T @ (A @ Z)).toarray()
+    n = Z.sum(0)[:, None]
+    B = M / (n @ n.T).clip(1, None)
+    if d is None:
+        c = np.array([1.])
+    else:
+        c = d / (Z @ (Z.T @ d)).clip(1, None) * (Z @ n)
+    ZB = Z @ B
+    W = inv_variance((ZB @ Z.T) * (c @ c.T), likelihood)
+    ZBW = ZB * W.mean(1)[:, None]
+    hess = ZB.T @ ZBW
+    np.fill_diagonal(hess, hess.diagonal() + alpha)
+    idx = argmaxH(Z_update, hess)
+    return idx
 
 
 def _fit(A, Z0, B0, c0,
@@ -132,6 +150,19 @@ def _fit(A, Z0, B0, c0,
 
     else:
         warnings.warn('Estimation did not converge.')
+
+    if converged and not overlapping:
+        ## Recompute optimal projection using "unconstrained" hessian ##
+        idx = _optimal_projection(Z_update, A, likelihood, alpha, d)
+        Z.indices[:], Z.data[:] = idx, 1
+        ## Recompute structure matrix ##
+        M = (Z.T @ (A @ Z)).toarray()
+        n = Z.sum(0)[:, None]
+        B = M / (n @ n.T).clip(1, None)
+        if degree_corrected:
+            c = d / (Z @ (Z.T @ d)).clip(1, None) * (Z @ n)
+        if track_scores:
+            trace.append(scorer(Z, B, c, M, n))
 
     return {
         'node_partition': Z,
@@ -242,6 +273,19 @@ def _fit_drop(A, Z0, B0, c0,
 
     else:
         warnings.warn('Estimation did not converge.')
+
+    if converged and not overlapping:
+        ## Recompute optimal projection using "unconstrained" hessian ##
+        idx = _optimal_projection(Z_update, A, likelihood, alpha, d)
+        Z.indices[:], Z.data[:] = idx, 1
+        ## Recompute structure matrix ##
+        M = (Z.T @ (A @ Z)).toarray()
+        n = Z.sum(0)[:, None]
+        B = M / (n @ n.T).clip(1, None)
+        if degree_corrected:
+            c = d / (Z @ (Z.T @ d)).clip(1, None) * (Z @ n)
+        if track_scores:
+            trace.append(scorer(Z, B, c, M, n))
 
     return {
         'node_partition': Z,
