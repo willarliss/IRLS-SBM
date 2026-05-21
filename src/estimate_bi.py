@@ -683,7 +683,8 @@ class DropBiSBM(BiSBM):
         (default: 3).
     """
 
-    def __init__(self, graph, n_communities_init=None, *,
+    def __init__(self, graph: nx.Graph,
+                 n_communities_init: Optional[Union[tuple, int]] = None, *,
                  likelihood: str = 'bernoulli',
                  overlapping: bool = False,
                  degree_corrected: bool = False,
