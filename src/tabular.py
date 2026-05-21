@@ -5,28 +5,10 @@ from typing import Optional
 
 import networkx as nx
 import numpy as np
-from scipy.sparse import csr_array
-from scipy.spatial.distance import cdist
 
 from .estimate import SBM, DropSBM
 from .initialization import init_lookup
-
-
-def make_adjacency(X, metric='euclidean', thresh=None):
-
-    if metric not in ("euclidean", "cityblock", "cosine", "correlation"):
-        raise ValueError("Unsupported metric: %s. Supported: 'euclidean', 'cityblock', 'cosine', 'correlation'" % metric)
-
-    n = X.shape[0]
-    if n == 0:
-        return csr_array((0, 0))
-
-    D = cdist(X, X, metric=metric)
-
-    if thresh is not None:
-        D = D * (D > thresh).astype(float)
-
-    return csr_array(D)
+from .misc import make_adjacency
 
 
 class TabSBM(SBM):

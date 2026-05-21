@@ -4,11 +4,20 @@ import numpy as np
 import numpy.linalg as nla
 import scipy.linalg as sla
 from scipy.sparse import csr_array
+from scipy.spatial.distance import cdist
 from scipy.stats import bernoulli, poisson, norm
 
 
 EPS = 1e-8
 DISTRS = {'bernoulli': bernoulli, 'poisson': poisson, 'normal': norm}
+
+
+class BaseSBM:
+    def __init__(self, G, likelihood='bernoulli'):
+        self.G = G
+        self.likelihood = likelihood
+    def fit(self, *args, **kwargs):
+        raise NotImplementedError
 
 
 def clog(x):
@@ -65,9 +74,18 @@ def solve(A, b, *, min_scipy_size=20):
     return x
 
 
-class BaseSBM:
-    def __init__(self, G, likelihood='bernoulli'):
-        self.G = G
-        self.likelihood = likelihood
-    def fit(self, *args, **kwargs):
-        raise NotImplementedError
+def make_adjacency(X, metric='euclidean', thresh=None):
+
+    if metric not in ("euclidean", "cityblock", "cosine", "correlation"):
+        raise ValueError(f"Unsupported metric: {metric}. Supported: 'euclidean', 'cityblock', 'cosine', 'correlation'")
+
+    n = X.shape[0]
+    if n == 0:
+        return csr_array((0, 0))
+
+    D = cdist(X, X, metric=metric)
+
+    if thresh is not None:
+        D = D * (D > thresh).astype(float)
+
+    return csr_array(D)
