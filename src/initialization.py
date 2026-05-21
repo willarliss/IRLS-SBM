@@ -416,6 +416,100 @@ def agglomerative_communities_bi(G: nx.Graph, *,
     return partition_l, partition_r
 
 
+def random_communities_tab(A: np.ndarray, *,
+                           overlap: Optional[float] = None,
+                           sparse: bool = True,
+                           seed: Optional[int] = None,
+                           k: int = 8):
+
+    rng = _ensure_rng(seed)
+    n = A.shape[0]
+
+    if overlap:
+        partition = rng.normal(size=(n, k), dtype=float)
+        partition = usimplex(partition, sparse=sparse)
+    else:
+        labels = rng.integers(0, k, size=n)
+        rows = np.arange(n)
+        data = np.ones(n, dtype=float)
+        if sparse:
+            partition = csr_array((data, (rows, labels)), shape=(n, k), dtype=float)
+        else:
+            partition = np.zeros((n, k), dtype=float)
+            partition[rows, labels] = data
+
+    return partition
+
+
+def kmeans_communities_tab(A: np.ndarray, *,
+                           overlap: Optional[float] = None,
+                           sparse: bool = True,
+                           seed: Optional[int] = None,
+                           k0: int = 8):
+
+    rng = _ensure_rng(seed)
+    n = A.shape[0]
+
+    X, _, _ = svds(A, k=k0+1, which='LM', return_singular_vectors='u', random_state=rng)
+    X = clst.vq.whiten(X)
+    centroids, _ = clst.vq.kmeans(X, k0, seed=rng)
+
+    if overlap is not None:
+        distances = cdist(X, centroids)
+        # labels = distances.argmin(1)
+        partition = usimplex(-distances/overlap)
+    else:
+        k = centroids.shape[0]
+        labels, _ = clst.vq.vq(X, centroids)
+        rows = np.arange(n)
+        data = np.ones(n, dtype=float)
+        if sparse:
+            partition = csr_array((data, (rows, labels)), shape=(n, k), dtype=float)
+        else:
+            partition = np.zeros((n, k), dtype=float)
+            partition[rows, labels] = data
+
+    return partition
+
+
+def agglomerative_communities_tab(A: np.ndarray, *,
+                                  overlap: Optional[float] = None,
+                                  sparse: bool = True,
+                                  seed: Optional[int] = None,
+                                  t: float = 1.0,
+                                  method: str = 'ward',
+                                  metric: str = 'euclidean',
+                                  criterion: str = 'distance'):
+
+    rng = _ensure_rng(seed)
+    n = A.shape[0]
+    dim = int(np.log(n).round() + 1)
+    if criterion == 'maxclust':
+        dim = max(t+1, dim)
+
+    X, _, _ = svds(A, k=dim, which='LM', return_singular_vectors='u', random_state=rng)
+    labels = clst.hierarchy.fclusterdata(X, t=t, criterion=criterion, metric=metric, method=method)
+    labels -= labels.min()
+    k = max(labels) + 1
+
+    rows = np.arange(n)
+    data = np.ones(n, dtype=float)
+    if overlap is not None:
+        partition = np.zeros((n, k), dtype=float)
+        partition[rows, labels] = data
+        mask = rng.uniform(0, 1, size=(n, k)) < overlap
+        partition[mask] += 0.1
+        partition = usimplex(partition, sparse=sparse)
+    else:
+        if sparse:
+            partition = csr_array((data, (rows, labels)), shape=(n, k), dtype=float)
+        else:
+            partition = np.zeros((n, k), dtype=float)
+            partition[rows, labels] = data
+
+    return partition
+
+
 init_lookup = {
     'standard': {
         'random': random_communities,
@@ -430,4 +524,9 @@ init_lookup = {
         'kmeans': kmeans_communities_bi,
         'agglomerative': agglomerative_communities_bi,
     },
+    'tabular': {
+        'random': random_communities_tab,
+        'kmeans': kmeans_communities_tab,
+        'agglomerative': agglomerative_communities_tab,
+    }
 }
