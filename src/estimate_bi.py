@@ -397,7 +397,7 @@ class BiSBM(BaseSBM):
             if len(graph.nodes) != self.n_nodes_l + self.n_nodes_r:
                 warnings.warn('`graph` input has different number of nodes than current graph.')
 
-        self.graph = graph.copy()
+        self.graph = graph
         nodes_l, nodes_r = nxb.sets(self.graph)
         self.n_nodes_l, self.n_nodes_r = len(nodes_l), len(nodes_r)
         self.biadjacency = nxb.biadjacency_matrix(self.graph, nodes_l, nodes_r, weight=self.weight).astype(float)
@@ -469,18 +469,20 @@ class BiSBM(BaseSBM):
 
     def _initialize_parameters(self):
 
-        if not self.community_init.endswith('bi'):
-            raise ValueError('`community_init` must be "*_bi".')
         try:
-            init_func = init_lookup[self.community_init]
+            init_func = init_lookup['bipartite'][self.community_init]
         except KeyError as err:
             raise ValueError(f"Unknown `community_init`: '{self.community_init}'.") from err
 
         kwargs = self.community_init_kwargs or {}
-        if self.overlapping:
-            kwargs['overlap'] = kwargs.get('overlap', 0.01)
-        else:
-            kwargs['overlap'] = None
+        kwargs['overlap'] = kwargs.get('overlap', 0.01) if self.overlapping else None
+        if self.community_init == 'random':
+            kwargs['k'] = kwargs.get('k', (self.n_communities_l, self.n_communities_r))
+        if self.community_init == 'kmeans':
+            kwargs['k0'] = kwargs.get('k0', (self.n_communities_l, self.n_communities_r))
+        if self.community_init == 'agglomerative':
+            if kwargs.get('criterion', '') in {'maxclust', 'maxclust_monocrit'}:
+                kwargs['t'] = kwargs.get('t', (self.n_communities_l, self.n_communities_r))
 
         partition_l, partition_r = init_func(self.graph, **kwargs)
         if partition_l.shape[1] != self.n_communities_l:
@@ -704,6 +706,8 @@ class DropBiSBM(BiSBM):
             overlapping=overlapping,
             degree_corrected=degree_corrected,
             weight=weight,
+            community_init='random',
+            community_init_kwargs=None,
         )
 
     def _initialize_parameters(self):

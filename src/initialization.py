@@ -333,7 +333,7 @@ def kmeans_communities_bi(G: nx.Graph, *,
     dim = max(k0_l, k0_r) + 1
 
     X_l, _, X_r = svds(B, k=dim, which='LM', return_singular_vectors=True, random_state=rng)
-    X_l, X_r = clst.vq.whiten(X_l), clst.vq.whiten(X_r)
+    X_l, X_r = clst.vq.whiten(X_l), clst.vq.whiten(X_r.T)
     centroids_l, _ = clst.vq.kmeans(X_l, k0_l, seed=rng)
     centroids_r, _ = clst.vq.kmeans(X_r, k0_r, seed=rng)
 
@@ -384,6 +384,7 @@ def agglomerative_communities_bi(G: nx.Graph, *,
         dim = max(t+1, dim)
 
     X_l, _, X_r = svds(B, k=dim, which='LM', return_singular_vectors=True, random_state=rng)
+    X_r = X_r.T
     labels_l = clst.hierarchy.fclusterdata(X_l, t=t, criterion=criterion, metric=metric, method=method)
     labels_r = clst.hierarchy.fclusterdata(X_r, t=t, criterion=criterion, metric=metric, method=method)
     labels_l, labels_r = labels_l-labels_l.min(), labels_r-labels_r.min()
@@ -416,13 +417,17 @@ def agglomerative_communities_bi(G: nx.Graph, *,
 
 
 init_lookup = {
-    'random': random_communities,
-    'louvain': louvain_communities,
-    'lpa': lpa_communities,
-    'wcc': wcc_communities,
-    'kmeans': kmeans_communities,
-    'agglomerative': agglomerative_communities,
-    'random_bi': random_communities_bi,
-    'kmeans_bi': kmeans_communities_bi,
-    'agglomerative_bi': agglomerative_communities_bi,
+    'standard': {
+        'random': random_communities,
+        'louvain': louvain_communities,
+        'lpa': lpa_communities,
+        'wcc': wcc_communities,
+        'kmeans': kmeans_communities,
+        'agglomerative': agglomerative_communities,
+    },
+    'bipartite': {
+        'random': random_communities_bi,
+        'kmeans': kmeans_communities_bi,
+        'agglomerative': agglomerative_communities_bi,
+    },
 }

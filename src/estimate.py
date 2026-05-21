@@ -324,7 +324,7 @@ class SBM(BaseSBM):
             if len(graph.nodes) != self.n_nodes:
                 warnings.warn('`graph` input has different number of nodes than current graph.')
 
-        self.graph = graph.copy()
+        self.graph = graph
         self.n_nodes = len(graph.nodes)
         self.adjacency = nx.to_scipy_sparse_array(self.graph, weight=self.weight).astype(float)
 
@@ -379,18 +379,20 @@ class SBM(BaseSBM):
 
     def _initialize_parameters(self):
 
-        if self.community_init.endswith('bi'):
-            raise ValueError('`community_init` must not be *_bi".')
         try:
-            init_func = init_lookup[self.community_init]
+            init_func = init_lookup['standard'][self.community_init]
         except KeyError as err:
             raise ValueError(f"Unknown `community_init`: '{self.community_init}'.") from err
 
         kwargs = self.community_init_kwargs or {}
-        if self.overlapping:
-            kwargs['overlap'] = kwargs.get('overlap', 0.01)
-        else:
-            kwargs['overlap'] = None
+        kwargs['overlap'] = kwargs.get('overlap', 0.01) if self.overlapping else None
+        if self.community_init == 'random':
+            kwargs['k'] = kwargs.get('k', self.n_communities)
+        if self.community_init == 'kmeans':
+            kwargs['k0'] = kwargs.get('k0', self.n_communities)
+        if self.community_init == 'agglomerative':
+            if kwargs.get('criterion', '') in {'maxclust', 'maxclust_monocrit'}:
+                kwargs['t'] = kwargs.get('t', self.n_communities)
 
         partition = init_func(self.graph, **kwargs)
         if partition.shape[1] != self.n_communities:
@@ -567,6 +569,8 @@ class DropSBM(SBM):
             overlapping=overlapping,
             degree_corrected=degree_corrected,
             weight=weight,
+            community_init='random',
+            community_init_kwargs=None,
         )
 
     def _initialize_parameters(self):
