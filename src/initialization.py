@@ -22,30 +22,10 @@ def _ensure_rng(seed):
 
 
 def random_communities(G: nx.Graph, *,
+                       k: int = 8,
                        overlap: Optional[float] = None,
                        sparse: bool = True,
-                       seed: Optional[int] = None,
-                       k: int = 8):
-    """Randomly assign nodes to communities.
-    This initializer either creates hard assignments (random labels) or a
-    soft/overlapping assignment sampled from a normal distribution and
-    projected to the simplex using `usimplex`.
-
-    Args:
-        G: NetworkX graph whose nodes will be assigned.
-        overlap: If a float is provided, a soft/overlapping assignment is
-            created (smaller values produce sharper assignments). If None a
-            hard partition is returned.
-        sparse: If True return a `scipy.sparse.csr_array` for hard
-            assignments; otherwise return a dense ndarray.
-        seed: Optional RNG seed (int) or `numpy.random.Generator`.
-        k: Number of communities.
-
-    Returns:
-        Either a `csr_array` (when `sparse=True` and `overlap` is
-        None) or a dense `np.ndarray` for soft assignments or when
-        `sparse=False`.
-    """
+                       seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
@@ -71,25 +51,6 @@ def _nx_communities(G: nx.Graph, alg: str = 'louvain', *,
                     sparse: bool = True,
                     seed: Optional[int] = None,
                     **kwargs):
-    """Run a NetworkX community routine and convert to partition matrix.
-    This internal helper wraps a small set of NetworkX community algorithms
-    (Louvain, label-propagation, and weakly-connected components) and
-    converts their output (iterable of node sets) into the same partition
-    matrix format used by other initializers.
-
-    Args:
-        G: NetworkX graph.
-        alg: Algorithm name, one of `'louvain'`, `'lpa'`, `'wcc'`.
-        overlap: Optional overlap strength; if provided a soft assignment is
-            returned via `usimplex`.
-        sparse: If True return a `csr_array` for hard assignments.
-        seed: Optional RNG seed (int) or Generator forwarded to NetworkX.
-        **kwargs: Algorithm specific keyword arguments (e.g. `weight`).
-
-    Returns:
-        Partition as a `csr_array` or `np.ndarray` depending on
-        `sparse` and `overlap`.
-    """
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
@@ -130,59 +91,37 @@ def _nx_communities(G: nx.Graph, alg: str = 'louvain', *,
 
 
 def louvain_communities(G: nx.Graph, *,
-                        overlap: Optional[float] = None,
-                        sparse: bool = True,
-                        seed: Optional[int] = None,
                         resolution: float = 1.,
                         weight: Optional[str] = 'weight',
-                        **kwargs):
-    """Louvain community detection wrapper.
-    See `_nx_communities` for return formats and the meaning of `overlap`
-    and `sparse`. The `resolution` and `weight` parameters are passed to
-    NetworkX's Louvain implementation.
-    """
-    kwargs.update({'resolution': resolution, 'weight': weight})
-    return _nx_communities(G, alg='louvain', overlap=overlap, sparse=sparse, seed=seed, **kwargs)
+                        overlap: Optional[float] = None,
+                        sparse: bool = True,
+                        seed: Optional[int] = None):
+    return _nx_communities(G, alg='louvain', resolution=resolution, weight=weight,
+                           overlap=overlap, sparse=sparse, seed=seed)
 
 
 def lpa_communities(G: nx.Graph, *,
+                    weight: Optional[str] = 'weight',
                     overlap: Optional[float] = None,
                     sparse: bool = True,
-                    seed: Optional[int] = None,
-                    weight: Optional[str] = 'weight',
-                    **kwargs):
-    """Label-propagation community detection wrapper.
-    See `_nx_communities` for details on return format.
-    """
-    kwargs.update({'weight': weight})
-    return _nx_communities(G, alg='lpa', overlap=overlap, sparse=sparse, seed=seed, **kwargs)
+                    seed: Optional[int] = None):
+    return _nx_communities(G, alg='lpa', weight=weight, overlap=overlap, sparse=sparse, seed=seed)
 
 
 def wcc_communities(G: nx.Graph, *,
                     overlap: Optional[float] = None,
                     sparse: bool = True,
-                    seed: Optional[int] = None,
-                    **kwargs):
-    """Weakly-connected-components wrapper (useful for directed graphs).
-    Returns connected components treated as communities. See
-    `_nx_communities` for return format.
-    """
-    return _nx_communities(G, alg='wcc', overlap=overlap, sparse=sparse, seed=seed, **kwargs)
+                    seed: Optional[int] = None):
+    return _nx_communities(G, alg='wcc', overlap=overlap, sparse=sparse, seed=seed)
 
 
 def kmeans_communities(G: nx.Graph, *,
+                       k0: int = 8,
+                       laplacian: bool = False,
+                       weight: Optional[str] = None,
                        overlap: Optional[float] = None,
                        sparse: bool = True,
-                       seed: Optional[int] = None,
-                       weight: Optional[str] = None,
-                       laplacian: bool = False,
-                       k0: int = 8):
-    """Spectral embedding followed by k-means clustering.
-    The adjacency (or biadjacency) matrix is decomposed using a truncated SVD
-    and k-means is run on the left singular vectors. When `overlap` is
-    provided a soft assignment is returned by turning distances into a
-    simplex-projected score.
-    """
+                       seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
@@ -213,19 +152,15 @@ def kmeans_communities(G: nx.Graph, *,
 
 
 def agglomerative_communities(G: nx.Graph, *,
-                              overlap: Optional[float] = None,
-                              sparse: bool = True,
-                              seed: Optional[int] = None,
-                              weight: Optional[str] = None,
-                              laplacian: bool = False,
                               t: float = 1.0,
                               method: str = 'ward',
                               metric: str = 'euclidean',
-                              criterion: str = 'distance'):
-    """Spectral embedding followed by hierarchical clustering.
-    Uses a truncated SVD to produce a low-dimensional embedding and applies
-    `scipy.cluster.hierarchy.fclusterdata` to produce cluster labels.
-    """
+                              criterion: str = 'distance',
+                              laplacian: bool = False,
+                              weight: Optional[str] = None,
+                              overlap: Optional[float] = None,
+                              sparse: bool = True,
+                              seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
@@ -260,24 +195,10 @@ def agglomerative_communities(G: nx.Graph, *,
 
 
 def random_communities_bi(G: nx.Graph, *,
+                          k: Union[int, Tuple[int, int]] = 8,
                           overlap: Optional[float] = None,
                           sparse: bool = True,
-                          seed: Optional[int] = None,
-                          k: Union[int, Tuple[int, int]] = 8):
-    """Randomly assign left and right nodes to communities independently.
-
-    Args:
-        G: Bipartite NetworkX graph.
-        overlap: If a float is provided, soft assignments are returned for each
-            side. If None hard assignments are returned.
-        sparse: If True return csr_array for hard assignments.
-        seed: RNG seed (int) or Generator.
-        k: Number of communities (single int applied to both sides or a
-            tuple `(k_left, k_right)`).
-
-    Returns:
-        Tuple of (left_partition, right_partition).
-    """
+                          seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     nodes_l, nodes_r = nxb.sets(G)
@@ -312,15 +233,11 @@ def random_communities_bi(G: nx.Graph, *,
 
 
 def kmeans_communities_bi(G: nx.Graph, *,
+                          k0: Union[int, Tuple[int, int]] = 8,
+                          weight: Optional[str] = None,
                           overlap: Optional[float] = None,
                           sparse: bool = True,
-                          seed: Optional[int] = None,
-                          weight: Optional[str] = None,
-                          k0: Union[int, Tuple[int, int]] = 8):
-    """Bipartite variant of spectral k-means initialization.
-    Performs a truncated SVD of the biadjacency matrix and runs k-means on
-    the left and right singular vectors independently.
-    """
+                          seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     nodes_l, nodes_r = nxb.sets(G)
@@ -362,18 +279,14 @@ def kmeans_communities_bi(G: nx.Graph, *,
 
 
 def agglomerative_communities_bi(G: nx.Graph, *,
-                                 overlap: Optional[float] = None,
-                                 sparse: bool = True,
-                                 seed: Optional[int] = None,
-                                 weight: Optional[str] = None,
                                  t: float = 1.0,
                                  method: str = 'ward',
                                  metric: str = 'euclidean',
-                                 criterion: str = 'distance'):
-    """Bipartite variant of spectral + hierarchical clustering.
-    Produces independent partitions for left and right nodes using the left
-    and right singular vectors of the biadjacency matrix.
-    """
+                                 criterion: str = 'distance',
+                                 weight: Optional[str] = None,
+                                 overlap: Optional[float] = None,
+                                 sparse: bool = True,
+                                 seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     nodes_l, nodes_r = nxb.sets(G)
@@ -416,14 +329,15 @@ def agglomerative_communities_bi(G: nx.Graph, *,
     return partition_l, partition_r
 
 
-def random_communities_tab(A: np.ndarray, *,
+def random_communities_tab(A: np.ndarray, X: np.ndarray, *,
+                           k: int = 8,
                            overlap: Optional[float] = None,
                            sparse: bool = True,
-                           seed: Optional[int] = None,
-                           k: int = 8):
+                           seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     n = A.shape[0]
+    assert n == A.shape[1] == X.shape[0]
 
     if overlap:
         partition = rng.normal(size=(n, k), dtype=float)
@@ -441,16 +355,20 @@ def random_communities_tab(A: np.ndarray, *,
     return partition
 
 
-def kmeans_communities_tab(A: np.ndarray, *,
+def kmeans_communities_tab(A: np.ndarray, X: np.ndarray, *,
+                           k0: int = 8,
+                           use_features: bool = False,
                            overlap: Optional[float] = None,
                            sparse: bool = True,
-                           seed: Optional[int] = None,
-                           k0: int = 8):
+                           seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     n = A.shape[0]
+    assert n == A.shape[1] == X.shape[0]
 
-    X, _, _ = svds(A, k=k0+1, which='LM', return_singular_vectors='u', random_state=rng)
+    if not use_features:
+        dim = k0 + 1
+        X, _, _ = svds(A, k=dim, which='LM', return_singular_vectors='u', random_state=rng)
     X = clst.vq.whiten(X)
     centroids, _ = clst.vq.kmeans(X, k0, seed=rng)
 
@@ -472,22 +390,25 @@ def kmeans_communities_tab(A: np.ndarray, *,
     return partition
 
 
-def agglomerative_communities_tab(A: np.ndarray, *,
-                                  overlap: Optional[float] = None,
-                                  sparse: bool = True,
-                                  seed: Optional[int] = None,
+def agglomerative_communities_tab(A: np.ndarray, X: np.ndarray, *,
                                   t: float = 1.0,
                                   method: str = 'ward',
                                   metric: str = 'euclidean',
-                                  criterion: str = 'distance'):
+                                  criterion: str = 'distance',
+                                  use_features: bool = False,
+                                  overlap: Optional[float] = None,
+                                  sparse: bool = True,
+                                  seed: Optional[int] = None):
 
     rng = _ensure_rng(seed)
     n = A.shape[0]
-    dim = int(np.log(n).round() + 1)
-    if criterion == 'maxclust':
-        dim = max(t+1, dim)
+    assert n == A.shape[1] == X.shape[0]
 
-    X, _, _ = svds(A, k=dim, which='LM', return_singular_vectors='u', random_state=rng)
+    if not use_features:
+        dim = int(np.log(n).round() + 1)
+        if criterion in {'maxclust', 'maxclust_monocrit'}:
+            dim = max(t+1, dim)
+        X, _, _ = svds(A, k=dim, which='LM', return_singular_vectors='u', random_state=rng)
     labels = clst.hierarchy.fclusterdata(X, t=t, criterion=criterion, metric=metric, method=method)
     labels -= labels.min()
     k = max(labels) + 1

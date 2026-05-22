@@ -76,7 +76,7 @@ class TabSBM(SBM):
             if kwargs.get('criterion', '') in {'maxclust', 'maxclust_monocrit'}:
                 kwargs['t'] = kwargs.get('t', self.n_communities)
 
-        partition = init_func(self.adjacency, **kwargs)
+        partition = init_func(self.adjacency, self.data, **kwargs)
         if partition.shape[1] != self.n_communities:
             warnings.warn('Initialized partition does not match `n_communities`. '
                           f'`self.n_communities` is overwritten to {partition.shape[1]}.')
