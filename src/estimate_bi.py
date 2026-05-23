@@ -317,48 +317,6 @@ def _fit_drop(A, Z0, B0, c0,
 
 
 class BiSBM(BaseSBM):
-    """Estimate and sample a bipartite Stochastic Block Model (BiSBM).
-    Supports standard, degree-corrected, and overlapping community models
-    with Bernoulli, Poisson, or normal edge likelihoods on bipartite graphs.
-
-    Parameters
-    ----------
-    graph : networkx.Graph
-        Input bipartite graph to operate on. Must be a NetworkX graph with
-        node sets for the two bipartite sides.
-    n_communities : int or tuple
-        Number of communities. If a tuple is provided it should be
-            `(n_communities_l, n_communities_r)` specifying counts for left and
-        right node partitions respectively.
-    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Edge distribution to use (default: 'bernoulli').
-    overlapping : bool, optional
-        If True, allow overlapping community membership (default: False).
-    degree_corrected : bool, optional
-        If True, use per-node degree correction (default: False).
-    weight : str or None, optional
-        Edge data attribute to use as weight when building the biadjacency matrix.
-    community_init : str, optional
-        Name of the initialization routine to use. For bipartite initialization
-        routines the name must end with '_bi'. The value must be a key in `initialization.init_lookup`.
-    community_init_kwargs : dict or None, optional
-        Additional keyword arguments forwarded to the initializer function.
-
-    Attributes
-    ----------
-    biadjacency : scipy.sparse.csr_array
-        Biadjacency matrix for the stored bipartite graph.
-    partition_l, partition_r : scipy.sparse.csr_array
-        Left and right node-to-community assignment matrices with shapes
-        `(n_nodes_l, n_communities_l)` and `(n_nodes_r, n_communities_r)`.
-    probabilities : numpy.ndarray
-        Block probability / rate matrix of shape `(n_communities_l, n_communities_r)`.
-    correction_l, correction_r : numpy.ndarray or None
-        Degree-correction vectors for left and right nodes when enabled,
-        otherwise None. Shapes `(n_nodes_l, 1)` and `(n_nodes_r, 1)`.
-    last_results : dict or None
-        Raw results returned by the most recent call to :meth:`fit`.
-    """
 
     def __init__(self, graph: nx.Graph, n_communities: Union[tuple, int], *,
                  likelihood: str = 'bernoulli',
@@ -485,12 +443,12 @@ class BiSBM(BaseSBM):
                 kwargs['t'] = kwargs.get('t', (self.n_communities_l, self.n_communities_r))
 
         partition_l, partition_r = init_func(self.graph, **kwargs)
-        if partition_l.shape[1] != self.n_communities_l:
-            warnings.warn('Initialized partition does not match `n_communities`. '
+        if (self.n_communities_l is not None) and (partition_l.shape[1] != self.n_communities_l):
+            warnings.warn('Initialized left partition does not match `n_communities`. '
                           f'`self.n_communities_l` is overwritten to {partition_l.shape[1]}.')
             self.n_communities_l = partition_l.shape[1]
-        if partition_r.shape[1] != self.n_communities_r:
-            warnings.warn('Initialized partition does not match `n_communities`. '
+        if (self.n_communities_r is not None) and (partition_r.shape[1] != self.n_communities_r):
+            warnings.warn('Initialized right partition does not match `n_communities`. '
                           f'`self.n_communities_r` is overwritten to {partition_r.shape[1]}.')
             self.n_communities_r = partition_r.shape[1]
         self.partition_l, self.partition_r = partition_l, partition_r
@@ -521,24 +479,6 @@ class BiSBM(BaseSBM):
             max_iter: int = 100,
             min_iter: int = 10,
             tol: float = 0.01):
-        """Fit BiSBM parameters to the stored bipartite graph.
-        Runs the iterative Fisher-scoring estimation procedure and updates
-        this instance's `partition_l`, `partition_r`, `probabilities`, and `correction_l`,
-        `correction_r`.
-
-        Parameters
-        ----------
-        alpha : float, optional
-            Curvature regularization added to the Hessian diagonal (default: 1e-4).
-        track_scores : bool, optional
-            If True, record per-iteration likelihood scores (default: False).
-        max_iter : int, optional
-            Maximum number of iterations (default: 100).
-        min_iter : int, optional
-            Minimum number of iterations before early-stopping is considered (default: 10).
-        tol : float, optional
-            Convergence tolerance on partition change (default: 0.01).
-        """
 
         results = _fit(self.biadjacency, (self.partition_l, self.partition_r),
                        self.probabilities, (self.correction_l, self.correction_r),
@@ -558,25 +498,6 @@ class BiSBM(BaseSBM):
     def sample(self,
                create_using: Optional[Union[type, nx.Graph]] = None
                ) -> Union[np.ndarray, nx.Graph]:
-        """Generate a random bipartite graph from the current BiSBM parameters.
-        Samples the biadjacency matrix according to the chosen likelihood and the
-        current parameters (partitions, block probabilities, and optional degree
-        corrections).
-
-        Parameters
-        ----------
-        create_using : type or networkx.Graph or None, optional
-            If provided, return a NetworkX bipartite graph of that type; otherwise
-            return the raw biadjacency ndarray. When a graph is returned, left
-            nodes are labeled 0..n_l-1 and right nodes are labeled n_l..n_l+n_r-1
-            and the sampled value is stored as the edge attribute `weight`.
-
-        Returns
-        -------
-        numpy.ndarray or networkx.Graph
-            The sampled biadjacency matrix (ndarray) or a NetworkX graph when
-            `create_using` is supplied.
-        """
 
         edge_probas = self.partition_l @ self.probabilities @ self.partition_r.T
         if self.degree_corrected:
@@ -599,9 +520,6 @@ class BiSBM(BaseSBM):
         return G
 
     def reset_graph(self, graph: nx.Graph):
-        """Replace the stored graph and rebuild the internal biadjacency matrix.
-        The provided graph is validated and copied into this instance.
-        """
         self._validate_graph(graph)
         return self
 
@@ -609,79 +527,24 @@ class BiSBM(BaseSBM):
                          partitions: Optional[Tuple[csr_array, csr_array]] = None,
                          probabilities: Optional[np.ndarray] = None,
                          corrections: Optional[Tuple[np.ndarray, np.ndarray]] = None):
-        """Reset or update model parameters.
-        If no arguments are provided, the parameters are randomly initialized.
-        Any supplied inputs are validated and set on the instance.
-
-        Parameters
-        ----------
-        partitions : tuple of (csr_array, csr_array), optional
-            Left and right partitions (sparse csr_array). Each must have shape
-            (n_nodes_l, n_communities_l) and (n_nodes_r, n_communities_r),
-            respectively.
-        probabilities : numpy.ndarray, optional
-            Block probability / rate matrix of shape (n_communities_l, n_communities_r).
-        corrections : tuple of (np.ndarray, np.ndarray), optional
-            Left and right degree-correction vectors (shaped [(n_nodes_l,1),(n_nodes_r,1)]).
-        """
         if (partitions is None) and (probabilities is None) and (corrections is None):
             self._initialize_parameters()
         self._validate_parameters(partitions, probabilities, corrections)
         return self
 
     def get_node_partition(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Return the node-to-community partition matrices for both sides as dense arrays.
-
-        Returns
-        -------
-        tuple
-            (partition_l, partition_r) where each element is a dense ndarray with
-            shapes (n_nodes_l, n_communities_l) and (n_nodes_r, n_communities_r),
-            respectively.
-        """
         return self.partition_l.toarray(), self.partition_r.toarray()
 
     def get_block_probabilities(self) -> np.ndarray:
-        """Return the block probability/rate matrix.
-        Shape is [n_communities_l, n_communities_r].
-        """
         return self.probabilities.copy()
 
     def get_degree_correction(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-        """Return the left and right degree-correction vectors if degree correction is enabled,
-        otherwise None. Shapes [(n_nodes_l, 1), (n_nodes_r, 1)]."""
         if self.degree_corrected:
             return self.correction_l.copy(), self.correction_r.copy()
         return None
 
 
 class DropBiSBM(BiSBM):
-    """Bipartite SBM estimator that discovers the number of communities by dropping small communities.
-    Extends :class:`BiSBM` with an iterative procedure that can remove communities that fall
-    below a minimum size threshold during estimation.
-
-    Parameters
-    ----------
-    graph : networkx.Graph
-        Input graph to analyze.
-    n_communities_init : int, tuple or None, optional
-        Initial number of communities; when None an initial guess is derived from
-        the graph size and `min_size`. If int is provided it is used for both sides.
-    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Edge likelihood (default: 'bernoulli').
-    overlapping : bool, optional
-        If True, allow overlapping community membership (default: False).
-    degree_corrected : bool, optional
-        If True, use degree correction (default: False).
-    weight : str or None, optional
-        Edge attribute to use as weight when building the biadjacency matrix.
-    min_size : int or tuple, optional
-        Minimum community size. If an int is provided it is applied to both
-        left and right sides; alternatively provide a tuple
-    `(min_size_l, min_size_r)` to set per-side thresholds. Communities
-        smaller than the threshold may be dropped during estimation
-        (default: 3).
-    """
 
     def __init__(self, graph: nx.Graph,
                  n_communities_init: Optional[Union[tuple, int]] = None, *,
@@ -732,24 +595,6 @@ class DropBiSBM(BiSBM):
             max_iter: int = 100,
             min_iter: int = 10,
             tol: float = 0.01):
-        """Fit the bipartite SBM while adaptively dropping small communities.
-
-        Parameters
-        ----------
-        alpha : float, optional
-            Curvature regularization for the Hessian diagonal (default: 1.0).
-        gamma : float, optional
-            Controls inverse-frequency penalty used when deciding which communities
-            to drop (default: 1.0).
-        track_scores : bool, optional
-            If True, record per-iteration likelihood scores (default: False).
-        max_iter : int, optional
-            Maximum iterations allowed (default: 100).
-        min_iter : int, optional
-            Minimum iterations before early-stopping checks (default: 10).
-        tol : float, optional
-            Convergence tolerance on partition change (default: 0.01).
-        """
 
         results = _fit_drop(self.biadjacency, (self.partition_l, self.partition_r), self.probabilities, (self.correction_l, self.correction_r),
                             likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,

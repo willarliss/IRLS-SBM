@@ -253,42 +253,6 @@ def _fit_drop(A, Z0, B0, c0,
 
 
 class SBM(BaseSBM):
-    """Estimate and sample a Stochastic Block Model (SBM). Supports standard, degree-corrected,
-    and overlapping community models with Bernoulli, Poisson, or normal edge likelihoods.
-
-    Parameters
-    ----------
-    graph : networkx.Graph
-        Input graph to operate on.
-    n_communities : int
-        Number of communities (columns in the partition matrix).
-    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Edge distribution to use (default: 'bernoulli').
-    overlapping : bool, optional
-        If True, allow overlapping community membership (default: False).
-    degree_corrected : bool, optional
-        If True, use per-node degree correction (default: False).
-    weight : str or None, optional
-        Edge data attribute to use as weight when building the adjacency matrix.
-    community_init : str, optional
-        Name of the initialization routine to use. Must match a key in
-        `initialization.init_lookup`.
-    community_init_kwargs : dict or None, optional
-        Additional keyword arguments forwarded to the initializer function.
-
-    Attributes
-    ----------
-    adjacency : scipy.sparse.csr_array
-        Adjacency matrix for the stored graph.
-    partition : scipy.sparse.csr_array
-        Node-to-community assignment matrix of shape [n_nodes, n_communities].
-    probabilities : numpy.ndarray
-        Block probability / rate matrix of shape [n_communities, n_communities].
-    correction : numpy.ndarray or None
-        Degree-correction vector of shape [n_nodes, 1] when enabled.
-    last_results : dict or None
-        Raw results returned by the most recent call to :meth:`fit`.
-    """
 
     def __init__(self, graph: nx.Graph, n_communities: int, *,
                  likelihood: str = 'bernoulli',
@@ -395,7 +359,7 @@ class SBM(BaseSBM):
                 kwargs['t'] = kwargs.get('t', self.n_communities)
 
         partition = init_func(self.graph, **kwargs)
-        if partition.shape[1] != self.n_communities:
+        if (self.n_communities is not None) and (partition.shape[1] != self.n_communities):
             warnings.warn('Initialized partition does not match `n_communities`. '
                           f'`self.n_communities` is overwritten to {partition.shape[1]}.')
             self.n_communities = partition.shape[1]
@@ -418,23 +382,6 @@ class SBM(BaseSBM):
             max_iter: int = 100,
             min_iter: int = 10,
             tol: float = 0.01):
-        """Fit SBM parameters to the stored graph.
-        Runs the iterative Fisher-scoring estimation procedure and updates
-        this instance's `partition`, `probabilities`, and `correction`.
-
-        Parameters
-        ----------
-        alpha : float, optional
-            Curvature regularization added to the Hessian diagonal (default: 1e-4).
-        track_scores : bool, optional
-            If True, record per-iteration likelihood scores (default: False).
-        max_iter : int, optional
-            Maximum number of iterations (default: 100).
-        min_iter : int, optional
-            Minimum number of iterations before early-stopping is considered (default: 10).
-        tol : float, optional
-            Convergence tolerance on partition change (default: 0.01).
-        """
 
         results = _fit(self.adjacency, self.partition, self.probabilities, self.correction,
                        likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,
@@ -452,24 +399,6 @@ class SBM(BaseSBM):
                selfloops: bool = True,
                create_using: Optional[Union[type, nx.Graph]] = None
                ) -> Union[np.ndarray, nx.Graph]:
-        """Generate a random graph from the current SBM parameters. Samples the
-        adjacency matrix according to the chosen likelihood and the current
-        parameters (partitions, block probabilities, and optional degree corrections).
-
-        Parameters
-        ----------
-        selfloops : bool, optional
-            If False, zero out diagonal probabilities (default: True).
-        create_using : type or networkx.Graph or None, optional
-            If provided, return a NetworkX graph of that type; otherwise return
-            the raw adjacency array sampled from the chosen likelihood.
-
-        Returns
-        -------
-        numpy.ndarray or networkx.Graph
-            Sampled adjacency matrix (ndarray) or a NetworkX graph when
-            `create_using` is supplied.
-        """
 
         edge_probas = self.partition @ self.probabilities @ self.partition.T
         if self.degree_corrected:
@@ -488,9 +417,6 @@ class SBM(BaseSBM):
         return graph
 
     def reset_graph(self, graph: nx.Graph):
-        """Replace the stored graph and rebuild internal adjacency matrix.
-        The provided graph is validated and copied into this instance.
-        """
         self._validate_graph(graph)
         return self
 
@@ -498,59 +424,23 @@ class SBM(BaseSBM):
                          partition: Optional[csr_array] = None,
                          probabilities: Optional[np.ndarray] = None,
                          correction: Optional[np.ndarray] = None):
-        """Reset or update the model parameters.
-        If no arguments are provided, the parameters are randomly initialized.
-        Any supplied inputs are validated and set on the instance.
-        """
         if (partition is None) and (probabilities is None) and (correction is None):
             self._initialize_parameters()
         self._validate_parameters(partition, probabilities, correction)
         return self
 
     def get_node_partition(self) -> np.ndarray:
-        """Return the node-to-community partition matrix as a dense array.
-        Shape [n_nodes, n_communities].
-        """
         return self.partition.toarray()
         # return self.partition.toarray() if self.overlapping else self.partition.indices.copy()
 
     def get_block_probabilities(self) -> np.ndarray:
-        """Return the block probability/rate matrix.
-        Shape is [n_communities, n_communities].
-        """
         return self.probabilities.copy()
 
     def get_degree_correction(self) -> Optional[np.ndarray]:
-        """Return the degree-correction vector if degree correction is enabled, otherwise None.
-        Shape [n_nodes, 1].
-        """
         return self.correction.copy() if self.degree_corrected else None
 
 
 class DropSBM(SBM):
-    """SBM estimator that discovers the number of communities by dropping small communities.
-    Extends :class:`SBM` with an iterative procedure that can remove communities that fall
-    below a minimum size threshold during estimation.
-
-    Parameters
-    ----------
-    graph : networkx.Graph
-        Input graph to analyze.
-    n_communities_init : int or None, optional
-        Initial number of communities; when None an initial guess is derived from
-        the graph size and `min_size`.
-    likelihood : {'bernoulli', 'poisson', 'normal'}, optional
-        Edge likelihood (default: 'bernoulli').
-    overlapping : bool, optional
-        If True, allow overlapping community membership (default: False).
-    degree_corrected : bool, optional
-        If True, use degree correction (default: False).
-    weight : str or None, optional
-        Edge attribute to use as weight when building the adjacency matrix.
-    min_size : int, optional
-        Minimum community size; communities smaller than this may be dropped
-        during estimation (default: 3).
-    """
 
     def __init__(self, graph: nx.Graph,
                  n_communities_init: Optional[int] = None, *,
@@ -590,24 +480,6 @@ class DropSBM(SBM):
             max_iter: int = 100,
             min_iter: int = 10,
             tol: float = 0.01):
-        """Fit the SBM while adaptively dropping small communities.
-
-        Parameters
-        ----------
-        alpha : float, optional
-            Curvature regularization for the Hessian diagonal (default: 1.0).
-        gamma : float, optional
-            Controls inverse-frequency penalty used when deciding which communities
-            to drop (default: 1.0).
-        track_scores : bool, optional
-            If True, record per-iteration likelihood scores (default: False).
-        max_iter : int, optional
-            Maximum iterations allowed (default: 100).
-        min_iter : int, optional
-            Minimum iterations before early-stopping checks (default: 10).
-        tol : float, optional
-            Convergence tolerance on partition change (default: 0.01).
-        """
 
         results = _fit_drop(self.adjacency, self.partition, self.probabilities, self.correction,
                             likelihood=self.likelihood, overlapping=self.overlapping, degree_corrected=self.degree_corrected,
