@@ -21,11 +21,34 @@ def _ensure_rng(seed):
     return np.random.default_rng()
 
 
-def random_communities(G: nx.Graph, *,
-                       k: int = 8,
-                       overlap: Optional[float] = None,
-                       sparse: bool = True,
-                       seed: Optional[int] = None):
+def random_communities(
+    G: nx.Graph,
+    *,
+    k: int = 8,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Generates a random community partition for a graph.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input graph.
+    k : int, default=8
+        Number of communities.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
@@ -46,11 +69,15 @@ def random_communities(G: nx.Graph, *,
     return partition
 
 
-def _nx_communities(G: nx.Graph, alg: str = 'louvain', *,
-                    overlap: Optional[float] = None,
-                    sparse: bool = True,
-                    seed: Optional[int] = None,
-                    **kwargs):
+def _nx_communities(
+    G: nx.Graph,
+    alg: str = "louvain",
+    *,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+    **kwargs,
+) -> np.ndarray | csr_array:
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
@@ -58,14 +85,17 @@ def _nx_communities(G: nx.Graph, alg: str = 'louvain', *,
     rows = np.arange(n)
     data = np.ones(n, dtype=float)
 
-    if alg == 'louvain':
-        alg_kwargs = dict(resolution=kwargs.get('resolution'),
-                          weight=kwargs.get('weight'), seed=seed)
+    if alg == "louvain":
+        alg_kwargs = dict(
+            resolution=kwargs.get("resolution"), weight=kwargs.get("weight"), seed=seed
+        )
         func = lambda g: nx.community.louvain_communities(g, **alg_kwargs)
-    elif alg == 'lpa':
-        alg_kwargs = dict(weight=kwargs.get('weight'), seed=seed)
-        func = lambda g: nx.community.fast_label_propagation_communities(g, **alg_kwargs)
-    elif alg == 'wcc':
+    elif alg == "lpa":
+        alg_kwargs = dict(weight=kwargs.get("weight"), seed=seed)
+        func = lambda g: nx.community.fast_label_propagation_communities(
+            g, **alg_kwargs
+        )
+    elif alg == "wcc":
         alg_kwargs = {}
         func = lambda g: nx.weakly_connected_components(g.to_directed())
     else:
@@ -90,38 +120,143 @@ def _nx_communities(G: nx.Graph, alg: str = 'louvain', *,
     return partition
 
 
-def louvain_communities(G: nx.Graph, *,
-                        resolution: float = 1.,
-                        weight: Optional[str] = 'weight',
-                        overlap: Optional[float] = None,
-                        sparse: bool = True,
-                        seed: Optional[int] = None):
-    return _nx_communities(G, alg='louvain', resolution=resolution, weight=weight,
-                           overlap=overlap, sparse=sparse, seed=seed)
+def louvain_communities(
+    G: nx.Graph,
+    *,
+    resolution: float = 1.0,
+    weight: Optional[str] = "weight",
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Detects communities using the Louvain algorithm.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input graph.
+    resolution : float, default=1.
+        Resolution parameter for Louvain.
+    weight : str, optional
+        Edge attribute to use as weight.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
+    return _nx_communities(
+        G,
+        alg="louvain",
+        resolution=resolution,
+        weight=weight,
+        overlap=overlap,
+        sparse=sparse,
+        seed=seed,
+    )
 
 
-def lpa_communities(G: nx.Graph, *,
-                    weight: Optional[str] = 'weight',
-                    overlap: Optional[float] = None,
-                    sparse: bool = True,
-                    seed: Optional[int] = None):
-    return _nx_communities(G, alg='lpa', weight=weight, overlap=overlap, sparse=sparse, seed=seed)
+def lpa_communities(
+    G: nx.Graph,
+    *,
+    weight: Optional[str] = "weight",
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Detects communities using label propagation.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input graph.
+    weight : str, optional
+        Edge attribute to use as weight.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
+    return _nx_communities(
+        G, alg="lpa", weight=weight, overlap=overlap, sparse=sparse, seed=seed
+    )
 
 
-def wcc_communities(G: nx.Graph, *,
-                    overlap: Optional[float] = None,
-                    sparse: bool = True,
-                    seed: Optional[int] = None):
-    return _nx_communities(G, alg='wcc', overlap=overlap, sparse=sparse, seed=seed)
+def wcc_communities(
+    G: nx.Graph,
+    *,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Detects weakly connected components as communities.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input graph.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
+    return _nx_communities(G, alg="wcc", overlap=overlap, sparse=sparse, seed=seed)
 
 
-def kmeans_communities(G: nx.Graph, *,
-                       k0: int = 8,
-                       laplacian: bool = False,
-                       weight: Optional[str] = None,
-                       overlap: Optional[float] = None,
-                       sparse: bool = True,
-                       seed: Optional[int] = None):
+def kmeans_communities(
+    G: nx.Graph,
+    *,
+    k0: int = 8,
+    laplacian: bool = False,
+    weight: Optional[str] = None,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Detects communities using k-means clustering on graph embeddings.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input graph.
+    k0 : int, default=8
+        Number of clusters.
+    laplacian : bool, default=False
+        Whether to use the Laplacian matrix.
+    weight : str, optional
+        Edge attribute to use as weight.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
@@ -129,14 +264,16 @@ def kmeans_communities(G: nx.Graph, *,
     if laplacian:
         A = diags(A.sum(1)) - A
 
-    X, _, _ = svds(A, k=k0+1, which='LM', return_singular_vectors='u', random_state=rng)
+    X, _, _ = svds(
+        A, k=k0 + 1, which="LM", return_singular_vectors="u", random_state=rng
+    )
     X = clst.vq.whiten(X)
     centroids, _ = clst.vq.kmeans(X, k0, seed=rng)
 
     if overlap is not None:
         distances = cdist(X, centroids)
         # labels = distances.argmin(1)
-        partition = usimplex(-distances/overlap)
+        partition = usimplex(-distances / overlap)
     else:
         k = centroids.shape[0]
         labels, _ = clst.vq.vq(X, centroids)
@@ -151,16 +288,49 @@ def kmeans_communities(G: nx.Graph, *,
     return partition
 
 
-def agglomerative_communities(G: nx.Graph, *,
-                              t: float = 1.0,
-                              method: str = 'ward',
-                              metric: str = 'euclidean',
-                              criterion: str = 'distance',
-                              laplacian: bool = False,
-                              weight: Optional[str] = None,
-                              overlap: Optional[float] = None,
-                              sparse: bool = True,
-                              seed: Optional[int] = None):
+def agglomerative_communities(
+    G: nx.Graph,
+    *,
+    t: float = 1.0,
+    method: str = "ward",
+    metric: str = "euclidean",
+    criterion: str = "distance",
+    laplacian: bool = False,
+    weight: Optional[str] = None,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Detects communities using agglomerative clustering on graph embeddings.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input graph.
+    t : float, default=1.0
+        Threshold for clustering.
+    method : str, default='ward'
+        Linkage method.
+    metric : str, default='euclidean'
+        Distance metric.
+    criterion : str, default='distance'
+        Clustering criterion.
+    laplacian : bool, default=False
+        Whether to use the Laplacian matrix.
+    weight : str, optional
+        Edge attribute to use as weight.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
@@ -168,11 +338,13 @@ def agglomerative_communities(G: nx.Graph, *,
     if laplacian:
         A = diags(A.sum(1)) - A
     dim = int(np.log(n).round() + 1)
-    if criterion == 'maxclust':
-        dim = max(t+1, dim)
+    if criterion == "maxclust":
+        dim = max(t + 1, dim)
 
-    X, _, _ = svds(A, k=dim, which='LM', return_singular_vectors='u', random_state=rng)
-    labels = clst.hierarchy.fclusterdata(X, t=t, criterion=criterion, metric=metric, method=method)
+    X, _, _ = svds(A, k=dim, which="LM", return_singular_vectors="u", random_state=rng)
+    labels = clst.hierarchy.fclusterdata(
+        X, t=t, criterion=criterion, metric=metric, method=method
+    )
     labels -= labels.min()
     k = max(labels) + 1
 
@@ -194,11 +366,34 @@ def agglomerative_communities(G: nx.Graph, *,
     return partition
 
 
-def random_communities_bi(G: nx.Graph, *,
-                          k: Union[int, Tuple[int, int]] = 8,
-                          overlap: Optional[float] = None,
-                          sparse: bool = True,
-                          seed: Optional[int] = None):
+def random_communities_bi(
+    G: nx.Graph,
+    *,
+    k: Union[int, Tuple[int, int]] = 8,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> Tuple[np.ndarray | csr_array, np.ndarray | csr_array]:
+    """Generates a random community partition for a bipartite graph.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input bipartite graph.
+    k : int or tuple of int, default=8
+        Number of communities for each bipartite set.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition_l, partition_r : np.ndarray or csr_array
+        Community assignment matrices for left and right node sets.
+    """
 
     rng = _ensure_rng(seed)
     nodes_l, nodes_r = nxb.sets(G)
@@ -221,8 +416,12 @@ def random_communities_bi(G: nx.Graph, *,
         data_l = np.ones(n_l, dtype=float)
         data_r = np.ones(n_r, dtype=float)
         if sparse:
-            partition_l = csr_array((data_l, (rows_l, labels_l)), shape=(n_l, k_l), dtype=float)
-            partition_r = csr_array((data_r, (rows_r, labels_r)), shape=(n_r, k_r), dtype=float)
+            partition_l = csr_array(
+                (data_l, (rows_l, labels_l)), shape=(n_l, k_l), dtype=float
+            )
+            partition_r = csr_array(
+                (data_r, (rows_r, labels_r)), shape=(n_r, k_r), dtype=float
+            )
         else:
             partition_l = np.zeros((n_l, k_l), dtype=float)
             partition_l[rows_l, labels_l] = data_l
@@ -232,12 +431,37 @@ def random_communities_bi(G: nx.Graph, *,
     return partition_l, partition_r
 
 
-def kmeans_communities_bi(G: nx.Graph, *,
-                          k0: Union[int, Tuple[int, int]] = 8,
-                          weight: Optional[str] = None,
-                          overlap: Optional[float] = None,
-                          sparse: bool = True,
-                          seed: Optional[int] = None):
+def kmeans_communities_bi(
+    G: nx.Graph,
+    *,
+    k0: Union[int, Tuple[int, int]] = 8,
+    weight: Optional[str] = None,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> Tuple[np.ndarray | csr_array, np.ndarray | csr_array]:
+    """Detects communities in a bipartite graph using k-means clustering.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input bipartite graph.
+    k0 : int or tuple of int, default=8
+        Number of clusters for each bipartite set.
+    weight : str, optional
+        Edge attribute to use as weight.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition_l, partition_r : np.ndarray or csr_array
+        Community assignment matrices for left and right node sets.
+    """
 
     rng = _ensure_rng(seed)
     nodes_l, nodes_r = nxb.sets(G)
@@ -249,7 +473,9 @@ def kmeans_communities_bi(G: nx.Graph, *,
     B = nxb.biadjacency_matrix(G, nodes_l, nodes_r, weight=weight).astype(float)
     dim = max(k0_l, k0_r) + 1
 
-    X_l, _, X_r = svds(B, k=dim, which='LM', return_singular_vectors=True, random_state=rng)
+    X_l, _, X_r = svds(
+        B, k=dim, which="LM", return_singular_vectors=True, random_state=rng
+    )
     X_l, X_r = clst.vq.whiten(X_l), clst.vq.whiten(X_r.T)
     centroids_l, _ = clst.vq.kmeans(X_l, k0_l, seed=rng)
     centroids_r, _ = clst.vq.kmeans(X_r, k0_r, seed=rng)
@@ -258,8 +484,8 @@ def kmeans_communities_bi(G: nx.Graph, *,
         distances_l = cdist(X_l, centroids_l)
         distances_r = cdist(X_r, centroids_r)
         # labels_l, labels_r = distances_l.argmin(1), distances_r.argmin(1)
-        partition_l = usimplex(-distances_l/overlap)
-        partition_r = usimplex(-distances_r/overlap)
+        partition_l = usimplex(-distances_l / overlap)
+        partition_r = usimplex(-distances_r / overlap)
     else:
         k_l, k_r = centroids_l.shape[0], centroids_r.shape[0]
         labels_l, _ = clst.vq.vq(X_l, centroids_l)
@@ -267,8 +493,12 @@ def kmeans_communities_bi(G: nx.Graph, *,
         rows_l, rows_r = np.arange(n_l), np.arange(n_r)
         data_l, data_r = np.ones(n_l, dtype=float), np.ones(n_r, dtype=float)
         if sparse:
-            partition_l = csr_array((data_l, (rows_l, labels_l)), shape=(n_l, k_l), dtype=float)
-            partition_r = csr_array((data_r, (rows_r, labels_r)), shape=(n_r, k_r), dtype=float)
+            partition_l = csr_array(
+                (data_l, (rows_l, labels_l)), shape=(n_l, k_l), dtype=float
+            )
+            partition_r = csr_array(
+                (data_r, (rows_r, labels_r)), shape=(n_r, k_r), dtype=float
+            )
         else:
             partition_l = np.zeros((n_l, k_l), dtype=float)
             partition_l[rows_l, labels_l] = data_l
@@ -278,30 +508,67 @@ def kmeans_communities_bi(G: nx.Graph, *,
     return partition_l, partition_r
 
 
-def agglomerative_communities_bi(G: nx.Graph, *,
-                                 t: float = 1.0,
-                                 method: str = 'ward',
-                                 metric: str = 'euclidean',
-                                 criterion: str = 'distance',
-                                 weight: Optional[str] = None,
-                                 overlap: Optional[float] = None,
-                                 sparse: bool = True,
-                                 seed: Optional[int] = None):
+def agglomerative_communities_bi(
+    G: nx.Graph,
+    *,
+    t: float = 1.0,
+    method: str = "ward",
+    metric: str = "euclidean",
+    criterion: str = "distance",
+    weight: Optional[str] = None,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> Tuple[np.ndarray | csr_array, np.ndarray | csr_array]:
+    """Detects communities in a bipartite graph using agglomerative clustering.
+
+    Parameters:
+    -----------
+    G : networkx.Graph
+        Input bipartite graph.
+    t : float, default=1.0
+        Threshold for clustering.
+    method : str, default='ward'
+        Linkage method.
+    metric : str, default='euclidean'
+        Distance metric.
+    criterion : str, default='distance'
+        Clustering criterion.
+    weight : str, optional
+        Edge attribute to use as weight.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition_l, partition_r : np.ndarray or csr_array
+        Community assignment matrices for left and right node sets.
+    """
 
     rng = _ensure_rng(seed)
     nodes_l, nodes_r = nxb.sets(G)
     n_l, n_r = len(nodes_l), len(nodes_r)
     B = nxb.biadjacency_matrix(G, nodes_l, nodes_r, weight=weight).astype(float)
     dim = int(np.log(max(n_l, n_r)).round() + 1)
-    if criterion == 'maxclust':
-        dim = max(t+1, dim)
+    if criterion == "maxclust":
+        dim = max(t + 1, dim)
 
-    X_l, _, X_r = svds(B, k=dim, which='LM', return_singular_vectors=True, random_state=rng)
+    X_l, _, X_r = svds(
+        B, k=dim, which="LM", return_singular_vectors=True, random_state=rng
+    )
     X_r = X_r.T
-    labels_l = clst.hierarchy.fclusterdata(X_l, t=t, criterion=criterion, metric=metric, method=method)
-    labels_r = clst.hierarchy.fclusterdata(X_r, t=t, criterion=criterion, metric=metric, method=method)
-    labels_l, labels_r = labels_l-labels_l.min(), labels_r-labels_r.min()
-    k_l, k_r = max(labels_l)+1, max(labels_r)+1
+    labels_l = clst.hierarchy.fclusterdata(
+        X_l, t=t, criterion=criterion, metric=metric, method=method
+    )
+    labels_r = clst.hierarchy.fclusterdata(
+        X_r, t=t, criterion=criterion, metric=metric, method=method
+    )
+    labels_l, labels_r = labels_l - labels_l.min(), labels_r - labels_r.min()
+    k_l, k_r = max(labels_l) + 1, max(labels_r) + 1
 
     rows_l, rows_r = np.arange(n_l), np.arange(n_r)
     data_l, data_r = np.ones(n_l, dtype=float), np.ones(n_r, dtype=float)
@@ -318,8 +585,12 @@ def agglomerative_communities_bi(G: nx.Graph, *,
         partition_r = usimplex(partition_r, sparse=sparse)
     else:
         if sparse:
-            partition_l = csr_array((data_l, (rows_l, labels_l)), shape=(n_l, k_l), dtype=float)
-            partition_r = csr_array((data_r, (rows_r, labels_r)), shape=(n_r, k_r), dtype=float)
+            partition_l = csr_array(
+                (data_l, (rows_l, labels_l)), shape=(n_l, k_l), dtype=float
+            )
+            partition_r = csr_array(
+                (data_r, (rows_r, labels_r)), shape=(n_r, k_r), dtype=float
+            )
         else:
             partition_l = np.zeros((n_l, k_l), dtype=float)
             partition_l[rows_l, labels_l] = data_l
@@ -329,11 +600,37 @@ def agglomerative_communities_bi(G: nx.Graph, *,
     return partition_l, partition_r
 
 
-def random_communities_tab(A: np.ndarray, X: np.ndarray, *,
-                           k: int = 8,
-                           overlap: Optional[float] = None,
-                           sparse: bool = True,
-                           seed: Optional[int] = None):
+def random_communities_tab(
+    A: np.ndarray,
+    X: np.ndarray,
+    *,
+    k: int = 8,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Generates a random community partition for tabular data.
+
+    Parameters:
+    -----------
+    A : np.ndarray
+        Adjacency matrix.
+    X : np.ndarray
+        Feature matrix.
+    k : int, default=8
+        Number of communities.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
 
     rng = _ensure_rng(seed)
     n = A.shape[0]
@@ -355,12 +652,40 @@ def random_communities_tab(A: np.ndarray, X: np.ndarray, *,
     return partition
 
 
-def kmeans_communities_tab(A: np.ndarray, X: np.ndarray, *,
-                           k0: int = 8,
-                           use_features: bool = False,
-                           overlap: Optional[float] = None,
-                           sparse: bool = True,
-                           seed: Optional[int] = None):
+def kmeans_communities_tab(
+    A: np.ndarray,
+    X: np.ndarray,
+    *,
+    k0: int = 8,
+    use_features: bool = False,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Detects communities in tabular data using k-means clustering.
+
+    Parameters:
+    -----------
+    A : np.ndarray
+        Adjacency matrix.
+    X : np.ndarray
+        Feature matrix.
+    k0 : int, default=8
+        Number of clusters.
+    use_features : bool, default=False
+        Whether to use features for clustering.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
 
     rng = _ensure_rng(seed)
     n = A.shape[0]
@@ -368,14 +693,16 @@ def kmeans_communities_tab(A: np.ndarray, X: np.ndarray, *,
 
     if not use_features:
         dim = k0 + 1
-        X, _, _ = svds(A, k=dim, which='LM', return_singular_vectors='u', random_state=rng)
+        X, _, _ = svds(
+            A, k=dim, which="LM", return_singular_vectors="u", random_state=rng
+        )
     X = clst.vq.whiten(X)
     centroids, _ = clst.vq.kmeans(X, k0, seed=rng)
 
     if overlap is not None:
         distances = cdist(X, centroids)
         # labels = distances.argmin(1)
-        partition = usimplex(-distances/overlap)
+        partition = usimplex(-distances / overlap)
     else:
         k = centroids.shape[0]
         labels, _ = clst.vq.vq(X, centroids)
@@ -390,15 +717,49 @@ def kmeans_communities_tab(A: np.ndarray, X: np.ndarray, *,
     return partition
 
 
-def agglomerative_communities_tab(A: np.ndarray, X: np.ndarray, *,
-                                  t: float = 1.0,
-                                  method: str = 'ward',
-                                  metric: str = 'euclidean',
-                                  criterion: str = 'distance',
-                                  use_features: bool = False,
-                                  overlap: Optional[float] = None,
-                                  sparse: bool = True,
-                                  seed: Optional[int] = None):
+def agglomerative_communities_tab(
+    A: np.ndarray,
+    X: np.ndarray,
+    *,
+    t: float = 1.0,
+    method: str = "ward",
+    metric: str = "euclidean",
+    criterion: str = "distance",
+    use_features: bool = False,
+    overlap: Optional[float] = None,
+    sparse: bool = True,
+    seed: Optional[int] = None,
+) -> np.ndarray | csr_array:
+    """Detects communities in tabular data using agglomerative clustering.
+
+    Parameters:
+    -----------
+    A : np.ndarray
+        Adjacency matrix.
+    X : np.ndarray
+        Feature matrix.
+    t : float, default=1.0
+        Threshold for clustering.
+    method : str, default='ward'
+        Linkage method.
+    metric : str, default='euclidean'
+        Distance metric.
+    criterion : str, default='distance'
+        Clustering criterion.
+    use_features : bool, default=False
+        Whether to use features for clustering.
+    overlap : float, optional
+        Overlap parameter for soft assignments.
+    sparse : bool, default=True
+        Whether to return a sparse matrix.
+    seed : int, optional
+        Random seed.
+
+    Returns:
+    --------
+    partition : np.ndarray or csr_array
+        Community assignment matrix.
+    """
 
     rng = _ensure_rng(seed)
     n = A.shape[0]
@@ -406,10 +767,14 @@ def agglomerative_communities_tab(A: np.ndarray, X: np.ndarray, *,
 
     if not use_features:
         dim = int(np.log(n).round() + 1)
-        if criterion in {'maxclust', 'maxclust_monocrit'}:
-            dim = max(t+1, dim)
-        X, _, _ = svds(A, k=dim, which='LM', return_singular_vectors='u', random_state=rng)
-    labels = clst.hierarchy.fclusterdata(X, t=t, criterion=criterion, metric=metric, method=method)
+        if criterion in {"maxclust", "maxclust_monocrit"}:
+            dim = max(t + 1, dim)
+        X, _, _ = svds(
+            A, k=dim, which="LM", return_singular_vectors="u", random_state=rng
+        )
+    labels = clst.hierarchy.fclusterdata(
+        X, t=t, criterion=criterion, metric=metric, method=method
+    )
     labels -= labels.min()
     k = max(labels) + 1
 
@@ -432,22 +797,22 @@ def agglomerative_communities_tab(A: np.ndarray, X: np.ndarray, *,
 
 
 init_lookup = {
-    'standard': {
-        'random': random_communities,
-        'louvain': louvain_communities,
-        'lpa': lpa_communities,
-        'wcc': wcc_communities,
-        'kmeans': kmeans_communities,
-        'agglomerative': agglomerative_communities,
+    "standard": {
+        "random": random_communities,
+        "louvain": louvain_communities,
+        "lpa": lpa_communities,
+        "wcc": wcc_communities,
+        "kmeans": kmeans_communities,
+        "agglomerative": agglomerative_communities,
     },
-    'bipartite': {
-        'random': random_communities_bi,
-        'kmeans': kmeans_communities_bi,
-        'agglomerative': agglomerative_communities_bi,
+    "bipartite": {
+        "random": random_communities_bi,
+        "kmeans": kmeans_communities_bi,
+        "agglomerative": agglomerative_communities_bi,
     },
-    'tabular': {
-        'random': random_communities_tab,
-        'kmeans': kmeans_communities_tab,
-        'agglomerative': agglomerative_communities_tab,
-    }
+    "tabular": {
+        "random": random_communities_tab,
+        "kmeans": kmeans_communities_tab,
+        "agglomerative": agglomerative_communities_tab,
+    },
 }
