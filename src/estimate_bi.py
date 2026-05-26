@@ -467,9 +467,9 @@ class BiSBM(BaseSBM):
         Whether to use degree correction.
     weight : str, optional
         Edge attribute to use as weight.
-    community_init : str, default='random'
+    partition_init : str, default='random'
         Community initialization method.
-    community_init_kwargs : dict, optional
+    partition_init_kwargs : dict, optional
         Additional arguments for initialization.
 
     Methods:
@@ -499,8 +499,8 @@ class BiSBM(BaseSBM):
         overlapping: bool = False,
         degree_corrected: bool = False,
         weight: Optional[str] = None,
-        community_init: str = "random",
-        community_init_kwargs: Optional[dict] = None,
+        partition_init: str = "random",
+        partition_init_kwargs: Optional[dict] = None,
     ):
 
         if isinstance(n_communities, tuple):
@@ -511,8 +511,8 @@ class BiSBM(BaseSBM):
         self.overlapping = overlapping
         self.degree_corrected = degree_corrected
         self.weight = weight
-        self.community_init = community_init
-        self.community_init_kwargs = community_init_kwargs
+        self.partition_init = partition_init
+        self.partition_init_kwargs = partition_init_kwargs
 
         self.graph = None
         self.biadjacency = None
@@ -647,21 +647,21 @@ class BiSBM(BaseSBM):
     def _initialize_parameters(self):
 
         try:
-            init_func = init_lookup["bipartite"][self.community_init]
+            init_func = init_lookup["bipartite"][self.partition_init]
         except KeyError as err:
             raise ValueError(
-                f"Unknown `community_init`: '{self.community_init}'."
+                f"Unknown `partition_init`: '{self.partition_init}'."
             ) from err
 
-        kwargs = self.community_init_kwargs or {}
+        kwargs = self.partition_init_kwargs or {}
         kwargs["overlap"] = kwargs.get("overlap", 0.01) if self.overlapping else None
-        if self.community_init == "random":
+        if self.partition_init == "random":
             kwargs["k"] = kwargs.get("k", (self.n_communities_l, self.n_communities_r))
-        if self.community_init == "kmeans":
+        if self.partition_init == "kmeans":
             kwargs["k0"] = kwargs.get(
                 "k0", (self.n_communities_l, self.n_communities_r)
             )
-        if self.community_init == "agglomerative":
+        if self.partition_init == "agglomerative":
             if kwargs.get("criterion", "") in {"maxclust", "maxclust_monocrit"}:
                 kwargs["t"] = kwargs.get(
                     "t", (self.n_communities_l, self.n_communities_r)
@@ -936,8 +936,8 @@ class DropBiSBM(BiSBM):
             overlapping=overlapping,
             degree_corrected=degree_corrected,
             weight=weight,
-            community_init="random",
-            community_init_kwargs=None,
+            partition_init="random",
+            partition_init_kwargs=None,
         )
 
     def _initialize_parameters(self):
