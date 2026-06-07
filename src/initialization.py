@@ -25,6 +25,7 @@ def random_communities(
     G: nx.Graph,
     *,
     k: int = 8,
+    min_size: Optional[int] = None,
     overlap: Optional[float] = None,
     sparse: bool = True,
     seed: Optional[int] = None,
@@ -52,14 +53,21 @@ def random_communities(
 
     rng = _ensure_rng(seed)
     n = len(G.nodes)
+    labels = np.tile(np.arange(k), (n+k-1)//k)[:n]
+    rows = np.arange(n)
+    data = np.ones(n, dtype=float)
 
-    if overlap:
-        partition = rng.normal(size=(n, k), dtype=float)
+    if (min_size is not None) and (min_size < n//k):
+        raise ValueError
+
+    rng.shuffle(labels)
+    if overlap is not None:
+        partition = np.zeros((n, k), dtype=float)
+        partition[rows, labels] = data
+        mask = rng.uniform(0, 1, size=(n, k)) < overlap
+        partition[mask] += 1/k
         partition = usimplex(partition, sparse=sparse)
     else:
-        labels = rng.integers(0, k, size=n)
-        rows = np.arange(n)
-        data = np.ones(n, dtype=float)
         if sparse:
             partition = csr_array((data, (rows, labels)), shape=(n, k), dtype=float)
         else:
@@ -108,7 +116,7 @@ def _nx_communities(
         partition = np.zeros((n, k), dtype=float)
         partition[rows, labels] = data
         mask = rng.uniform(0, 1, size=(n, k)) < overlap
-        partition[mask] += 0.1
+        partition[mask] += 1/k
         partition = usimplex(partition, sparse=sparse)
     else:
         if sparse:
@@ -223,11 +231,22 @@ def wcc_communities(
     return _nx_communities(G, alg="wcc", overlap=overlap, sparse=sparse, seed=seed)
 
 
+def _kmeans_centroids(X, k0, min_size=None, seed=None):
+    X = clst.vq.whiten(X)
+    centroids, _ = clst.vq.kmeans(X, k0, seed=seed)
+    if min_size is not None:
+        labels, _ = clst.vq.vq(X, centroids)
+        mask = np.bincount(labels, minlength=centroids.shape[0]) >= min_size
+        centroids = centroids[mask, :]
+    return centroids
+
+
 def kmeans_communities(
     G: nx.Graph,
     *,
     k0: int = 8,
     laplacian: bool = False,
+    min_size: Optional[int] = None,
     weight: Optional[str] = None,
     overlap: Optional[float] = None,
     sparse: bool = True,
@@ -267,8 +286,7 @@ def kmeans_communities(
     X, _, _ = svds(
         A, k=k0 + 1, which="LM", return_singular_vectors="u", random_state=rng
     )
-    X = clst.vq.whiten(X)
-    centroids, _ = clst.vq.kmeans(X, k0, seed=rng)
+    centroids = _kmeans_centroids(X, k0, min_size=min_size, seed=rng)
 
     if overlap is not None:
         distances = cdist(X, centroids)
@@ -288,6 +306,51 @@ def kmeans_communities(
     return partition
 
 
+def _trim_agglomerative_communities(labels, Z, min_size, max_iter=1000):
+    # Generated with the help of Claude
+
+    labels = labels.copy()
+    n = labels.shape[0]
+    Z_lr = Z[:, :2].astype(int)
+
+    parent = np.full(2 * n - 1, -1, dtype=int)
+    parent[Z_lr[:, 0]] = parent[Z_lr[:, 1]] = n + np.arange(n - 1)
+
+    for _ in range(max_iter):
+        sizes = np.bincount(labels, minlength=labels.max() + 1)
+        small = np.where((sizes > 0) & (sizes < min_size))[0]
+        if not len(small):
+            break
+
+        node_label = np.zeros(2 * n - 1, dtype=int)
+        node_label[:n] = labels
+        for i, (l, r) in enumerate(Z_lr):
+            nl, nr = node_label[l], node_label[r]
+            node_label[n + i] = nl if nl == nr else 0
+
+        changed = False
+        for c in small:
+            root = int(np.where(node_label == c)[0][-1])
+            p = parent[root]
+            if p == -1:
+                continue
+            l, r = Z_lr[p - n]
+            sibling = r if l == root else l
+            target = node_label[sibling]
+            if not target:
+                nd = sibling
+                while nd > n:
+                    nd = Z_lr[nd - n, 0]
+                target = node_label[nd]
+            labels[labels == c] = target
+            changed = True
+        if not changed:
+            break
+
+    _, labels = np.unique(labels, return_inverse=True)
+    return labels + 1
+
+
 def agglomerative_communities(
     G: nx.Graph,
     *,
@@ -296,6 +359,7 @@ def agglomerative_communities(
     metric: str = "euclidean",
     criterion: str = "distance",
     laplacian: bool = False,
+    min_size: Optional[int] = None,
     weight: Optional[str] = None,
     overlap: Optional[float] = None,
     sparse: bool = True,
@@ -342,9 +406,10 @@ def agglomerative_communities(
         dim = max(t + 1, dim)
 
     X, _, _ = svds(A, k=dim, which="LM", return_singular_vectors="u", random_state=rng)
-    labels = clst.hierarchy.fclusterdata(
-        X, t=t, criterion=criterion, metric=metric, method=method
-    )
+    Z = clst.hierarchy.linkage(X, method=method, metric=metric)
+    labels = clst.hierarchy.fcluster(Z, t=t, criterion=criterion)
+    if min_size is not None:
+        labels = _trim_agglomerative_communities(labels, Z, min_size=min_size)
     labels -= labels.min()
     k = max(labels) + 1
 
@@ -354,7 +419,7 @@ def agglomerative_communities(
         partition = np.zeros((n, k), dtype=float)
         partition[rows, labels] = data
         mask = rng.uniform(0, 1, size=(n, k)) < overlap
-        partition[mask] += 0.1
+        partition[mask] += 1/k
         partition = usimplex(partition, sparse=sparse)
     else:
         if sparse:
@@ -435,6 +500,7 @@ def kmeans_communities_bi(
     G: nx.Graph,
     *,
     k0: Union[int, Tuple[int, int]] = 8,
+    min_size: Optional[Union[tuple, int]] = None,
     weight: Optional[str] = None,
     overlap: Optional[float] = None,
     sparse: bool = True,
@@ -470,6 +536,10 @@ def kmeans_communities_bi(
         k0_l, k0_r = k0
     else:
         k0_l = k0_r = k0
+    if isinstance(min_size, tuple):
+        min_size_l, min_size_r = min_size
+    else:
+        min_size_l = min_size_r = min_size
     B = nxb.biadjacency_matrix(G, nodes_l, nodes_r, weight=weight).astype(float)
     dim = max(k0_l, k0_r) + 1
 
@@ -477,8 +547,8 @@ def kmeans_communities_bi(
         B, k=dim, which="LM", return_singular_vectors=True, random_state=rng
     )
     X_l, X_r = clst.vq.whiten(X_l), clst.vq.whiten(X_r.T)
-    centroids_l, _ = clst.vq.kmeans(X_l, k0_l, seed=rng)
-    centroids_r, _ = clst.vq.kmeans(X_r, k0_r, seed=rng)
+    centroids_l = _kmeans_centroids(X_l, k0_l, min_size=min_size_l, seed=rng)
+    centroids_r = _kmeans_centroids(X_r, k0_r, min_size=min_size_r, seed=rng)
 
     if overlap is not None:
         distances_l = cdist(X_l, centroids_l)
@@ -515,6 +585,7 @@ def agglomerative_communities_bi(
     method: str = "ward",
     metric: str = "euclidean",
     criterion: str = "distance",
+    min_size: Optional[int] = None,
     weight: Optional[str] = None,
     overlap: Optional[float] = None,
     sparse: bool = True,
@@ -561,12 +632,17 @@ def agglomerative_communities_bi(
         B, k=dim, which="LM", return_singular_vectors=True, random_state=rng
     )
     X_r = X_r.T
-    labels_l = clst.hierarchy.fclusterdata(
-        X_l, t=t, criterion=criterion, metric=metric, method=method
-    )
-    labels_r = clst.hierarchy.fclusterdata(
-        X_r, t=t, criterion=criterion, metric=metric, method=method
-    )
+
+    Z_l = clst.hierarchy.linkage(X_l, method=method, metric=metric)
+    labels_l = clst.hierarchy.fcluster(Z_l, t=t, criterion=criterion)
+    if min_size is not None:
+        labels_l = _trim_agglomerative_communities(labels_l, Z_l, min_size=min_size)
+
+    Z_r = clst.hierarchy.linkage(X_r, method=method, metric=metric)
+    labels_r = clst.hierarchy.fcluster(Z_r, t=t, criterion=criterion)
+    if min_size is not None:
+        labels_r = _trim_agglomerative_communities(labels_r, Z_r, min_size=min_size)
+
     labels_l, labels_r = labels_l - labels_l.min(), labels_r - labels_r.min()
     k_l, k_r = max(labels_l) + 1, max(labels_r) + 1
 
@@ -784,7 +860,7 @@ def agglomerative_communities_tab(
         partition = np.zeros((n, k), dtype=float)
         partition[rows, labels] = data
         mask = rng.uniform(0, 1, size=(n, k)) < overlap
-        partition[mask] += 0.1
+        partition[mask] += 1/k
         partition = usimplex(partition, sparse=sparse)
     else:
         if sparse:
