@@ -307,7 +307,53 @@ def kmeans_communities(
 
 
 def _trim_agglomerative_communities(labels, Z, min_size, max_iter=1000):
-    # Generated with the help of Claude
+    """Merge small clusters produced by hierarchical agglomerative clustering.
+    The function takes an initial 1-D array of cluster labels (as produced by
+    scipy.cluster.hierarchy.fcluster) and a linkage matrix ``Z`` (as produced
+    by scipy.cluster.hierarchy.linkage) and repeatedly merges clusters whose
+    sizes are smaller than ``min_size`` into nearby sibling clusters in the
+    dendrogram. The merging follows the tree defined by ``Z``: for a small
+    cluster we locate the node corresponding to the cluster in the linkage
+    tree, find its sibling at the first parent, and reassign members of the
+    small cluster to the sibling's label (or to the sibling's eventual leaf
+    label if the sibling is itself an internal node).
+
+    Parameters
+    ----------
+    labels : array_like, shape (n,)
+        Integer cluster labels for each of the n original observations. These
+        are expected to be in the same format as returned by
+        ``scipy.cluster.hierarchy.fcluster`` (typically 1-indexed labels).
+    Z : array_like, shape (n-1, 4)
+        Linkage matrix returned by ``scipy.cluster.hierarchy.linkage`` that
+        describes the hierarchical clustering tree used to obtain ``labels``.
+    min_size : int
+        Minimum allowed cluster size. Any cluster with size strictly less
+        than ``min_size`` will be merged into a neighboring cluster following
+        the dendrogram structure.
+    max_iter : int, optional
+        Maximum number of iterations to attempt merging small clusters. This
+        is a safety cap to avoid infinite loops in degenerate trees (default
+        1000).
+
+    Returns
+    -------
+    new_labels : ndarray, shape (n,)
+        Integer labels after merging small clusters. The returned labels are
+        reindexed to be contiguous and are shifted to be 1-based (i.e.
+        smallest label is 1).
+
+    Notes
+    -----
+    - If a very small cluster cannot be merged at its immediate parent
+      (because the sibling is also an internal node without a clear leaf
+      assignment), the algorithm walks down the sibling branch to find a
+      leaf label to merge into.
+    - If merging is impossible for some clusters (for example because the
+      cluster corresponds to the root), those clusters are left unchanged.
+    - Complexity is roughly linear in the number of nodes per iteration; the
+      number of iterations is bounded by ``max_iter``.
+    """
 
     labels = labels.copy()
     n = labels.shape[0]
@@ -435,6 +481,7 @@ def random_communities_bi(
     G: nx.Graph,
     *,
     k: Union[int, Tuple[int, int]] = 8,
+    min_size: Optional[Union[tuple, int]] = None,
     overlap: Optional[float] = None,
     sparse: bool = True,
     seed: Optional[int] = None,
@@ -468,18 +515,34 @@ def random_communities_bi(
     else:
         k_l = k_r = k
 
+    if isinstance(min_size, tuple):
+        min_size_l, min_size_r = min_size
+    else:
+        min_size_l = min_size_r = min_size
+    if (min_size_l is not None) and (min_size_l < n_l // k_l):
+        raise ValueError
+    if (min_size_r is not None) and (min_size_r < n_r // k_r):
+        raise ValueError
+
+    labels_l = np.tile(np.arange(k_l), (n_l + k_l - 1) // k_l)[:n_l]
+    labels_r = np.tile(np.arange(k_r), (n_r + k_r - 1) // k_r)[:n_r]
+    rows_l = np.arange(n_l)
+    rows_r = np.arange(n_r)
+    data_l = np.ones(n_l, dtype=float)
+    data_r = np.ones(n_r, dtype=float)
+
     if overlap:
-        partition_l = rng.normal(size=(n_l, k_l), dtype=float)
+        partition_l = np.zeros((n_l, k_l), dtype=float)
+        partition_l[rows_l, labels_l] = data_l
+        mask_l = rng.uniform(0, 1, size=(n_l, k_l)) < overlap
+        partition_l[mask_l] += 0.1
         partition_l = usimplex(partition_l, sparse=sparse)
-        partition_r = rng.normal(size=(n_r, k_r), dtype=float)
+        partition_r = np.zeros((n_r, k_r), dtype=float)
+        partition_r[rows_r, labels_r] = data_r
+        mask_r = rng.uniform(0, 1, size=(n_r, k_r)) < overlap
+        partition_r[mask_r] += 0.1
         partition_r = usimplex(partition_r, sparse=sparse)
     else:
-        labels_l = rng.integers(0, k_l, size=n_l)
-        labels_r = rng.integers(0, k_r, size=n_r)
-        rows_l = np.arange(n_l)
-        rows_r = np.arange(n_r)
-        data_l = np.ones(n_l, dtype=float)
-        data_r = np.ones(n_r, dtype=float)
         if sparse:
             partition_l = csr_array(
                 (data_l, (rows_l, labels_l)), shape=(n_l, k_l), dtype=float
@@ -627,6 +690,10 @@ def agglomerative_communities_bi(
     dim = int(np.log(max(n_l, n_r)).round() + 1)
     if criterion == "maxclust":
         dim = max(t + 1, dim)
+    if isinstance(min_size, tuple):
+        min_size_l, min_size_r = min_size
+    else:
+        min_size_l = min_size_r = min_size
 
     X_l, _, X_r = svds(
         B, k=dim, which="LM", return_singular_vectors=True, random_state=rng
@@ -635,13 +702,13 @@ def agglomerative_communities_bi(
 
     Z_l = clst.hierarchy.linkage(X_l, method=method, metric=metric)
     labels_l = clst.hierarchy.fcluster(Z_l, t=t, criterion=criterion)
-    if min_size is not None:
-        labels_l = _trim_agglomerative_communities(labels_l, Z_l, min_size=min_size)
+    if min_size_l is not None:
+        labels_l = _trim_agglomerative_communities(labels_l, Z_l, min_size=min_size_l)
 
     Z_r = clst.hierarchy.linkage(X_r, method=method, metric=metric)
     labels_r = clst.hierarchy.fcluster(Z_r, t=t, criterion=criterion)
-    if min_size is not None:
-        labels_r = _trim_agglomerative_communities(labels_r, Z_r, min_size=min_size)
+    if min_size_r is not None:
+        labels_r = _trim_agglomerative_communities(labels_r, Z_r, min_size=min_size_r)
 
     labels_l, labels_r = labels_l - labels_l.min(), labels_r - labels_r.min()
     k_l, k_r = max(labels_l) + 1, max(labels_r) + 1
@@ -681,6 +748,7 @@ def random_communities_tab(
     X: np.ndarray,
     *,
     k: int = 8,
+    min_size: Optional[int] = None,
     overlap: Optional[float] = None,
     sparse: bool = True,
     seed: Optional[int] = None,
@@ -711,14 +779,21 @@ def random_communities_tab(
     rng = _ensure_rng(seed)
     n = A.shape[0]
     assert n == A.shape[1] == X.shape[0]
+    labels = np.tile(np.arange(k), (n+k-1)//k)[:n]
+    rows = np.arange(n)
+    data = np.ones(n, dtype=float)
 
-    if overlap:
-        partition = rng.normal(size=(n, k), dtype=float)
+    if (min_size is not None) and (min_size < n//k):
+        raise ValueError
+
+    rng.shuffle(labels)
+    if overlap is not None:
+        partition = np.zeros((n, k), dtype=float)
+        partition[rows, labels] = data
+        mask = rng.uniform(0, 1, size=(n, k)) < overlap
+        partition[mask] += 1/k
         partition = usimplex(partition, sparse=sparse)
     else:
-        labels = rng.integers(0, k, size=n)
-        rows = np.arange(n)
-        data = np.ones(n, dtype=float)
         if sparse:
             partition = csr_array((data, (rows, labels)), shape=(n, k), dtype=float)
         else:
@@ -733,6 +808,7 @@ def kmeans_communities_tab(
     X: np.ndarray,
     *,
     k0: int = 8,
+    min_size: Optional[int] = None,
     use_features: bool = False,
     overlap: Optional[float] = None,
     sparse: bool = True,
@@ -773,7 +849,7 @@ def kmeans_communities_tab(
             A, k=dim, which="LM", return_singular_vectors="u", random_state=rng
         )
     X = clst.vq.whiten(X)
-    centroids, _ = clst.vq.kmeans(X, k0, seed=rng)
+    centroids = _kmeans_centroids(X, k0, min_size=min_size, seed=rng)
 
     if overlap is not None:
         distances = cdist(X, centroids)
@@ -801,6 +877,7 @@ def agglomerative_communities_tab(
     method: str = "ward",
     metric: str = "euclidean",
     criterion: str = "distance",
+    min_size: Optional[int] = None,
     use_features: bool = False,
     overlap: Optional[float] = None,
     sparse: bool = True,
@@ -848,9 +925,10 @@ def agglomerative_communities_tab(
         X, _, _ = svds(
             A, k=dim, which="LM", return_singular_vectors="u", random_state=rng
         )
-    labels = clst.hierarchy.fclusterdata(
-        X, t=t, criterion=criterion, metric=metric, method=method
-    )
+    Z = clst.hierarchy.linkage(X, method=method, metric=metric)
+    labels = clst.hierarchy.fcluster(Z, t=t, criterion=criterion)
+    if min_size is not None:
+        labels = _trim_agglomerative_communities(labels, Z, min_size=min_size)
     labels -= labels.min()
     k = max(labels) + 1
 

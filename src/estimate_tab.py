@@ -87,6 +87,24 @@ class TabSBM(SBM):
         self.n_nodes = data.shape[0]
         self.adjacency = make_adjacency(self.data, self.metric, self.thresh)
 
+    def _get_partition_init_kwargs(self):
+
+        if self.partition_init_kwargs is None:
+            kwargs = {}
+        else:
+            kwargs = self.partition_init_kwargs.copy()
+
+        kwargs["overlap"] = kwargs.get("overlap", 0.01) if self.overlapping else None
+        if self.partition_init == "random":
+            kwargs["k"] = kwargs.get("k", self.n_communities)
+        if self.partition_init == "kmeans":
+            kwargs["k0"] = kwargs.get("k0", self.n_communities)
+        if self.partition_init == "agglomerative":
+            if kwargs.get("criterion", "") in {"maxclust", "maxclust_monocrit"}:
+                kwargs["t"] = kwargs.get("t", self.n_communities)
+
+        return kwargs
+
     def _initialize_parameters(self):
 
         if self.adjacency is None:
@@ -99,16 +117,7 @@ class TabSBM(SBM):
                 f"Unknown `partition_init`: '{self.partition_init}'."
             ) from err
 
-        kwargs = self.partition_init_kwargs or {}
-        kwargs["overlap"] = kwargs.get("overlap", 0.01) if self.overlapping else None
-        if self.partition_init == "random":
-            kwargs["k"] = kwargs.get("k", self.n_communities)
-        if self.partition_init == "kmeans":
-            kwargs["k0"] = kwargs.get("k0", self.n_communities)
-        if self.partition_init == "agglomerative":
-            if kwargs.get("criterion", "") in {"maxclust", "maxclust_monocrit"}:
-                kwargs["t"] = kwargs.get("t", self.n_communities)
-
+        kwargs = self._get_partition_init_kwargs()
         partition = init_func(self.adjacency, self.data, **kwargs)
         if partition.shape[1] != self.n_communities:
             warnings.warn(
@@ -226,6 +235,8 @@ class DropTabSBM(TabSBM):
         metric: str = "euclidean",
         thresh: Optional[float] = None,
         min_size: int = 3,
+        partition_init: str = "random",
+        partition_init_kwargs: Optional[dict] = None,
     ):
 
         self.n_communities_init = n_communities_init
@@ -238,9 +249,14 @@ class DropTabSBM(TabSBM):
             degree_corrected=degree_corrected,
             metric=metric,
             thresh=thresh,
-            partition_init="random",
-            partition_init_kwargs=None,
+            partition_init=partition_init,
+            partition_init_kwargs=partition_init_kwargs,
         )
+
+    def _get_partition_init_kwargs(self):
+        kwargs = super()._get_partition_init_kwargs()
+        kwargs['min_size'] = kwargs.get('min_size', self.min_size)
+        return kwargs
 
     def _initialize_parameters(self):
 
@@ -248,6 +264,11 @@ class DropTabSBM(TabSBM):
             self.n_communities = self.n_nodes // self.min_size
         else:
             self.n_communities = int(self.n_communities_init)
+
+        if self.partition_init not in {'random', 'kmeans', 'agglomerative'}:
+            raise ValueError(
+                f"`partition_init` '{self.partition_init}' is not compatible with community dropping."
+            )
 
         super()._initialize_parameters()
 

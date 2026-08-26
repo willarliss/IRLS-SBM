@@ -644,16 +644,13 @@ class BiSBM(BaseSBM):
                     "`corrections` input provided, but `degree_corrected` is False."
                 )
 
-    def _initialize_parameters(self):
+    def _get_partition_init_kwargs(self):
 
-        try:
-            init_func = init_lookup["bipartite"][self.partition_init]
-        except KeyError as err:
-            raise ValueError(
-                f"Unknown `partition_init`: '{self.partition_init}'."
-            ) from err
+        if self.partition_init_kwargs is None:
+            kwargs = {}
+        else:
+            kwargs = self.partition_init_kwargs.copy()
 
-        kwargs = self.partition_init_kwargs or {}
         kwargs["overlap"] = kwargs.get("overlap", 0.01) if self.overlapping else None
         if self.partition_init == "random":
             kwargs["k"] = kwargs.get("k", (self.n_communities_l, self.n_communities_r))
@@ -667,6 +664,18 @@ class BiSBM(BaseSBM):
                     "t", (self.n_communities_l, self.n_communities_r)
                 )
 
+        return kwargs
+
+    def _initialize_parameters(self):
+
+        try:
+            init_func = init_lookup["bipartite"][self.partition_init]
+        except KeyError as err:
+            raise ValueError(
+                f"Unknown `partition_init`: '{self.partition_init}'."
+            ) from err
+
+        kwargs = self._get_partition_init_kwargs()
         partition_l, partition_r = init_func(self.graph, **kwargs)
         if (self.n_communities_l is not None) and (
             partition_l.shape[1] != self.n_communities_l
@@ -917,8 +926,10 @@ class DropBiSBM(BiSBM):
         overlapping: bool = False,
         degree_corrected: bool = False,
         weight: Optional[str] = None,
-        min_size: Union[tuple, int] = 3,
-    ) -> None:
+        min_size: int = 3,
+        partition_init: str = "random",
+        partition_init_kwargs: Optional[dict] = None,
+    ):
 
         if isinstance(n_communities_init, tuple):
             self.n_communities_init_l, self.n_communities_init_r = n_communities_init
@@ -936,9 +947,14 @@ class DropBiSBM(BiSBM):
             overlapping=overlapping,
             degree_corrected=degree_corrected,
             weight=weight,
-            partition_init="random",
-            partition_init_kwargs=None,
+            partition_init=partition_init,
+            partition_init_kwargs=partition_init_kwargs,
         )
+
+    def _get_partition_init_kwargs(self):
+        kwargs = super()._get_partition_init_kwargs()
+        kwargs['min_size'] = kwargs.get('min_size', (self.min_size_l, self.min_size_r))
+        return kwargs
 
     def _initialize_parameters(self):
 
@@ -951,6 +967,11 @@ class DropBiSBM(BiSBM):
             self.n_communities_r = self.n_nodes_r // self.min_size_r
         else:
             self.n_communities_r = int(self.n_communities_init_r)
+
+        if self.partition_init not in {'random', 'kmeans', 'agglomerative'}:
+            raise ValueError(
+                f"`partition_init` '{self.partition_init}' is not compatible with community dropping."
+            )
 
         super()._initialize_parameters()
 
